@@ -1,0 +1,64 @@
+# Web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12
+
+# Config & utils
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-dotenv==1.0.1
+
+# DB
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# Vector DB
+pymilvus==2.4.9
+
+# Graph DB
+neo4j==5.27.0
+
+# Queue / Async
+redis==5.2.1
+celery==5.4.0
+
+# File storage
+minio==7.2.11
+
+# ── 문서 파서 ──────────────────────────────────
+# PDF
+pymupdf==1.24.14          # 텍스트 PDF 파싱
+pdfplumber==0.11.4        # 표 구조 추출
+
+# XLSX
+openpyxl==3.1.5           # 병합셀 포함 표 처리
+
+# HWPX (ZIP+XML)
+lxml==5.3.0               # HWPX 직접 파싱용
+
+# HWP (바이너리 OLE) → LibreOffice fallback
+python-hwp5==0.6.1        # libhwp 바인딩
+
+# OCR (로컬 전용 — 외부 API 사용 불가)
+pytesseract==0.3.13       # Tesseract 래퍼
+Pillow==11.0.0            # 이미지 전처리
+
+# ── AI / ML ────────────────────────────────────
+# LLM 클라이언트 (내부 vLLM 서버 호출용)
+openai==1.57.4            # vLLM이 OpenAI API 호환
+
+# 임베딩
+sentence-transformers==3.3.1
+
+# Table Transformer (스캔 PDF 표 구조 복원)
+transformers==4.47.1
+torch==2.5.1
+timm==1.0.12
+
+# ── Auth ───────────────────────────────────────
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# HTTP
+httpx==0.28.1
