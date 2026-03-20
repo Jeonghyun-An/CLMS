@@ -1,4 +1,3 @@
-
 version: "3.9"
 
 x-contract-net: &contract-net
@@ -6,8 +5,6 @@ x-contract-net: &contract-net
     - contract-net
 
 services:
-
-  # ── etcd ─────────────────────────────────────
   etcd:
     image: quay.io/coreos/etcd:v3.5.0
     container_name: contract-etcd
@@ -29,14 +26,20 @@ services:
       - contract_etcd_data:/etcd
     <<: *contract-net
     healthcheck:
-      test: ["CMD","etcdctl","endpoint","health","--endpoints=http://127.0.0.1:2379"]
+      test:
+        [
+          "CMD",
+          "etcdctl",
+          "endpoint",
+          "health",
+          "--endpoints=http://127.0.0.1:2379",
+        ]
       interval: 5s
       timeout: 3s
       retries: 15
       start_period: 20s
     restart: unless-stopped
 
-  # ── MinIO ────────────────────────────────────
   minio:
     image: minio/minio:latest
     container_name: contract-minio
@@ -47,11 +50,11 @@ services:
     volumes:
       - contract_minio_data:/data
     ports:
-      - "21000:9000"   # library:19000 / kormem:20000
-      - "21001:9001"   # library:19001 / kormem:20001
+      - "21000:9000" # library:19000 / kormem:20000
+      - "21001:9001"
     <<: *contract-net
     healthcheck:
-      test: ["CMD","curl","-fsS","http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -69,7 +72,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_BUCKET: "contract-bucket"
-    entrypoint: ["/bin/sh","-c"]
+    entrypoint: ["/bin/sh", "-c"]
     command: >
       "
       mc alias set myminio http://minio:9000 $${MINIO_ACCESS_KEY} $${MINIO_SECRET_KEY} &&
@@ -79,11 +82,10 @@ services:
       "
     restart: "no"
 
-  # ── Milvus ───────────────────────────────────
   milvus:
     image: milvusdb/milvus:v2.4.6
     container_name: contract-milvus
-    command: ["milvus","run","standalone"]
+    command: ["milvus", "run", "standalone"]
     environment:
       ETCD_ENDPOINTS: "etcd:2379"
       MINIO_ADDRESS: "minio:9000"
@@ -102,7 +104,7 @@ services:
         condition: service_completed_successfully
     <<: *contract-net
     healthcheck:
-      test: ["CMD","curl","-fsS","http://localhost:9091/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:9091/healthz"]
       interval: 10s
       timeout: 5s
       retries: 60
@@ -110,60 +112,59 @@ services:
     restart: unless-stopped
 
   # ── vLLM ─────────────────────────────────────
-  # library 프로젝트(18080) vLLM을 공유할거면 없앨예정
-  # 외부에서 VLLM_BASE_URL=http://host.docker.internal:18080/v1 로 연결
-  vllm:
-    image: vllm/vllm-openai:latest-cu130
-    container_name: contract-vllm
-    <<: *contract-net
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: ["gpu"]
-    shm_size: "16g"
-    environment:
-      HUGGINGFACE_HUB_TOKEN: ${HUGGINGFACE_TOKEN}
-      HF_TOKEN: ${HUGGINGFACE_TOKEN}
-      HF_HOME: "/models"
-      CUDA_VISIBLE_DEVICES: "0"
-      NVIDIA_VISIBLE_DEVICES: "0"
-      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
-      TRANSFORMERS_OFFLINE: "0"
-      VLLM_WORKER_MULTIPROC_METHOD: "spawn"
-    volumes:
-      - /data/models/.hf-cache:/models:rw
-    command:
-      - ${VLLM_MODEL:-Qwen/Qwen2.5-14B-Instruct}
-      - --served-model-name
-      - ${VLLM_SERVED_NAME:-qwen2.5-14b}
-      - --download-dir
-      - /models
-      - --max-model-len
-      - "16384"
-      - --dtype
-      - bfloat16
-      - --gpu-memory-utilization
-      - "0.25"
-      - --max-num-seqs
-      - "4"
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8000"
-    ports:
-      - "18083:8000"   # library:18080 / kormem:18082
-    healthcheck:
-      test: ["CMD","curl","-fsS","http://127.0.0.1:8000/v1/models"]
-      interval: 30s
-      timeout: 10s
-      retries: 40
-      start_period: 600s
-    restart: unless-stopped
+  # library(18080) / kormem(18082) 공유 가능
+  # 이 프로젝트 독립 실행 시만 주석 해제
+  # vllm:
+  #   image: vllm/vllm-openai:latest-cu130
+  #   container_name: contract-vllm
+  #   <<: *contract-net
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: ["gpu"]
+  #   shm_size: "16g"
+  #   environment:
+  #     HUGGINGFACE_HUB_TOKEN: ${HUGGINGFACE_TOKEN}
+  #     HF_TOKEN: ${HUGGINGFACE_TOKEN}
+  #     HF_HOME: "/models"
+  #     CUDA_VISIBLE_DEVICES: "0"
+  #     NVIDIA_VISIBLE_DEVICES: "0"
+  #     NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
+  #     TRANSFORMERS_OFFLINE: "0"
+  #     VLLM_WORKER_MULTIPROC_METHOD: "spawn"
+  #   volumes:
+  #     - /data/models/.hf-cache:/models:rw
+  #   command:
+  #     - ${VLLM_MODEL:-Qwen/Qwen2.5-14B-Instruct}
+  #     - --served-model-name
+  #     - ${VLLM_SERVED_NAME:-qwen2.5-14b}
+  #     - --download-dir
+  #     - /models
+  #     - --max-model-len
+  #     - "16384"
+  #     - --dtype
+  #     - bfloat16
+  #     - --gpu-memory-utilization
+  #     - "0.25"
+  #     - --max-num-seqs
+  #     - "4"
+  #     - --host
+  #     - "0.0.0.0"
+  #     - --port
+  #     - "8000"
+  #   ports:
+  #     - "18083:8000"   # library:18080 / kormem:18082
+  #   healthcheck:
+  #     test: ["CMD","curl","-fsS","http://127.0.0.1:8000/v1/models"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 40
+  #     start_period: 600s
+  #   restart: unless-stopped
 
-  # ── PostgreSQL  ──────────
   postgres:
     image: postgres:16-alpine
     container_name: contract-postgres
@@ -172,44 +173,42 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
     ports:
-      - "15432:5432"   # 기본 5432 충돌 회피
+      - "15432:5432"
     volumes:
       - contract_postgres_data:/var/lib/postgresql/data
     <<: *contract-net
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER:-admin}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin}"]
       interval: 5s
       timeout: 3s
       retries: 15
       start_period: 20s
     restart: unless-stopped
 
-  # ── Redis  ───────────────
   redis:
     image: redis:7-alpine
     container_name: contract-redis
     ports:
-      - "16379:6379"   # 기본 6379 충돌 회피
+      - "16379:6379"
     volumes:
       - contract_redis_data:/data
     <<: *contract-net
     healthcheck:
-      test: ["CMD","redis-cli","ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 10s
     restart: unless-stopped
 
-  # ── Neo4j  ───────────────
   neo4j:
     image: neo4j:5.26
     container_name: contract-neo4j
     <<: *contract-net
     restart: unless-stopped
     ports:
-      - "7475:7474"    # library 없음 / 기본 7474 혹시 모를 충돌 회피
-      - "7688:7687"    # 기본 7687 충돌 회피
+      - "7475:7474" # library: 7474
+      - "7688:7687" # library: 7687
     environment:
       NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-password123}
       NEO4J_dbms_security_auth__enabled: "true"
@@ -225,22 +224,33 @@ services:
       - contract_neo4j_logs:/logs
       - contract_neo4j_plugins:/plugins
     healthcheck:
-      test: ["CMD-SHELL","cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD:-password123} 'RETURN 1' || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD:-password123} 'RETURN 1' || exit 1",
+        ]
       interval: 20s
       timeout: 10s
       retries: 10
       start_period: 60s
 
-  # ── FastAPI ───────────────────────────────────
   fastapi:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: landsoftdocker/clms-fastapi:latest
     container_name: contract-fastapi
     <<: *contract-net
+    shm_size: "4g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
     environment:
       IS_DOCKER: "true"
       PYTHONUNBUFFERED: "1"
+      CUDA_VISIBLE_DEVICES: "0"
+      NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
 
       POSTGRES_HOST: "postgres"
       POSTGRES_PORT: "5432"
@@ -267,17 +277,18 @@ services:
 
       # vLLM 공유 시 → http://host.docker.internal:18080/v1
       # 독립 vLLM 시  → http://vllm:8000/v1
-      VLLM_BASE_URL: ${VLLM_BASE_URL:-http://vllm:8000/v1}
-      VLLM_MODEL: ${VLLM_SERVED_NAME:-qwen2.5-14b}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-http://host.docker.internal:18080/v1}
+      VLLM_MODEL: ${VLLM_SERVED_NAME:-gemma-3-12b}
 
       EMBEDDING_MODEL_NAME: "BAAI/bge-m3"
       EMBEDDING_BATCH_SIZE: "32"
+      EMBEDDING_MAX_LENGTH: "512"
 
-      TESSERACT_LANG: "kor+eng"
+      PADDLEOCR_MODEL_DIR: "/models/paddleocr"
     volumes:
-      - ./backend:/app
+      - /data/models/.hf-cache:/models:rw # 기존 프로젝트와 모델 캐시 공유
     ports:
-      - "18002:8000"   # library:18000 / kormem:18001
+      - "18002:8000" # library:18000 / kormem:18001
     depends_on:
       postgres:
         condition: service_healthy
@@ -289,26 +300,31 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      # vllm:
-      #   condition: service_healthy  # vllm 로딩 전 fastapi 먼저 뜨도록 주석
     healthcheck:
-      test: ["CMD","curl","-fsS","http://localhost:8000/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 60s
     restart: unless-stopped
 
-  # ── Celery 워커 ───────────────────────────────
   celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: landsoftdocker/clms-fastapi:latest
     container_name: contract-celery
     <<: *contract-net
+    shm_size: "4g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
     environment:
       IS_DOCKER: "true"
+      PYTHONUNBUFFERED: "1"
+      CUDA_VISIBLE_DEVICES: "0"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       POSTGRES_HOST: "postgres"
@@ -316,8 +332,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-contract_review}
       POSTGRES_USER: ${POSTGRES_USER:-admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      PADDLEOCR_MODEL_DIR: "/models/paddleocr"
+      VLLM_BASE_URL: "http://host.docker.internal:18080/v1"
+      VLLM_MODEL: "gemma-3-12b"
     volumes:
-      - ./backend:/app
+      - /data/models/.hf-cache:/models:rw
     depends_on:
       redis:
         condition: service_healthy
@@ -325,11 +344,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Nuxt.js ───────────────────────────────────
   nuxt:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: landsoftdocker/clms-nuxt:latest
     container_name: contract-nuxt
     <<: *contract-net
     environment:
@@ -342,7 +358,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ── Nginx ─────────────────────────────────────
   gateway:
     image: nginx:alpine
     container_name: contract-gateway
@@ -351,12 +366,12 @@ services:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./infra/nginx/conf.d:/etc/nginx/conf.d:ro
     ports:
-      - "92:80"        # library:90 / kormem:91
+      - "92:80" # library:90 / kormem:91
     depends_on:
       - nuxt
       - fastapi
     healthcheck:
-      test: ["CMD","wget","-q","--spider","http://127.0.0.1/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/health"]
       interval: 10s
       timeout: 5s
       retries: 10

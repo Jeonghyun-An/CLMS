@@ -3,10 +3,8 @@ set -e
 
 echo "=== contract-review: 네트워크 & 볼륨 생성 ==="
 
-# 네트워크
 docker network create contract-net 2>/dev/null || echo "[skip] contract-net 이미 존재"
 
-# 볼륨
 volumes=(
   contract_etcd_data
   contract_milvus_data
