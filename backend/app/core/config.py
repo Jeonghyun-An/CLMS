@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # vLLM
     VLLM_BASE_URL: str = "http://vllm:8000/v1"
     VLLM_MODEL: str = "Qwen/Qwen2.5-72B-Instruct"
-
+    USE_MOCK_LLM: bool = True
     # JWT
     SECRET_KEY: str = "change-this-in-production"
     ALGORITHM: str = "HS256"
