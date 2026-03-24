@@ -1,129 +1,132 @@
 from __future__ import annotations
-from enum import Enum
+
+from datetime import datetime
 from typing import Optional
+
 from pydantic import BaseModel, Field
 
-
-class DocumentCategory(str, Enum):
-    contract = "contract"           # 계약서
-    specification = "specification" # 시방서/설계내역서
-    cost = "cost"                   # 산출내역서/예산서
-    guideline = "guideline"         # 가이드라인/내부지침
-    law = "law"                     # 법령
-    approval = "approval"           # 결재/전결규정
-    other = "other"                 # 미분류
-
-
-class ReviewStatus(str, Enum):
-    pending = "pending"
-    processing = "processing"
-    done = "done"
-    error = "error"
+from app.schemas.common import BaseSchema, BBox, PaginationMeta
+from app.schemas.enums import (
+    DocumentType,
+    IssueCategory,
+    ParseStatus,
+    ReviewResult,
+    ReviewStatus,
+    SeverityLevel,
+)
 
 
-class IssueSeverity(str, Enum):
-    error = "error"
-    warning = "warning"
-    info = "info"
+class ReviewRunOptions(BaseSchema):
+    run_entity_extraction: bool = True
+    run_consistency_check: bool = True
+    run_approval_line_check: bool = True
+    generate_highlight: bool = True
+    generate_report_pdf: bool = True
+    generate_checklist: bool = True
 
 
-class IssueType(str, Enum):
-    numeric_violation = "numeric_violation"   # 수치 위반 (deterministic)
-    missing_clause = "missing_clause"         # 조항 누락
-    compliance_risk = "compliance_risk"       # 법적 리스크 (LLM)
-    format_error = "format_error"             # 양식 오류
+class ReviewCreateRequest(BaseSchema):
+    document_ids: list[int] = Field(..., min_length=1, description="검토 대상 문서 ID 목록")
+    checklist_template_id: Optional[int] = None
+    regulation_set_ids: list[int] = []
+    options: ReviewRunOptions = ReviewRunOptions()
 
 
-# ─── 문서 업로드 ─────────────────────────────────────────────────────────────
-
-class DocumentUploadItem(BaseModel):
-    id: str
-    name: str
-    category: DocumentCategory
-    size: int
+class ReviewCreateResponse(BaseSchema):
+    review_run_id: int
+    project_id: int
+    status: ReviewStatus
+    created_at: datetime
 
 
-class DocumentUploadResponse(BaseModel):
-    doc_id: str
-    name: str
-    category: DocumentCategory
-    auto_category: DocumentCategory
-    file_key: str
-    size: int
-    status: ReviewStatus = ReviewStatus.pending
+class ReviewStatusResponse(BaseSchema):
+    review_run_id: int
+    status: ReviewStatus
+    progress: int = Field(..., ge=0, le=100)
+    current_step: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
 
 
-# ─── 검토 결과 ───────────────────────────────────────────────────────────────
+class ReviewSummaryResponse(BaseSchema):
+    review_run_id: int
+    overall_result: ReviewResult
+    risk_score: float
+    issue_count: int
+    high_issue_count: int = 0
+    warning_issue_count: int = 0
+    info_issue_count: int = 0
+    summary_text: str
 
-class LegalCitation(BaseModel):
-    article_id: str
-    source: str
-    article: str
-    title: str
-    relevant_excerpt: str
+
+class RegulationReference(BaseSchema):
+    regulation_id: Optional[int] = None
+    regulation_title: Optional[str] = None
+    article_id: Optional[int] = None
+    article_no: Optional[str] = None
+    article_title: Optional[str] = None
+    quoted_text: Optional[str] = None
 
 
-class ReviewIssue(BaseModel):
-    issue_id: str
-    rule_id: str
-    issue_type: IssueType
-    severity: IssueSeverity
+class IssueEvidenceResponse(BaseSchema):
+    id: int
+    document_id: int
+    page_no: Optional[int] = None
+    block_id: Optional[int] = None
+    cell_id: Optional[int] = None
+    quoted_text: Optional[str] = None
+    bbox: Optional[BBox] = None
+
+
+class ReviewIssueListItemResponse(BaseSchema):
+    id: int
+    document_id: Optional[int] = None
+    severity: SeverityLevel
+    category: IssueCategory
     title: str
     description: str
-    location: Optional[str] = None
-    detected_value: Optional[str] = None
-    expected_value: Optional[str] = None
-    citations: list[LegalCitation] = Field(default_factory=list)
-    rag_confidence: float = 0.0
-    retrieval_source: str = ""    # "deterministic" | "vector" | "graph" | "mock_llm"
+    recommendation: Optional[str] = None
+    status: str
+    created_at: datetime
 
 
-class DocumentReviewResult(BaseModel):
-    doc_id: str
-    doc_name: str
-    category: DocumentCategory
-    status: ReviewStatus
-    issues: list[ReviewIssue] = Field(default_factory=list)
-    summary: str = ""
-    error_count: int = 0
-    warning_count: int = 0
-    info_count: int = 0
+class ReviewIssueListResponse(BaseSchema):
+    items: list[ReviewIssueListItemResponse]
+    meta: PaginationMeta
 
 
-class ReviewJobResponse(BaseModel):
-    job_id: str
-    status: ReviewStatus
-    document_results: list[DocumentReviewResult] = Field(default_factory=list)
-    total_errors: int = 0
-    total_warnings: int = 0
-    created_at: str
-    completed_at: Optional[str] = None
+class ReviewIssueDetailResponse(BaseSchema):
+    id: int
+    review_run_id: int
+    document_id: Optional[int] = None
+    severity: SeverityLevel
+    category: IssueCategory
+    title: str
+    description: str
+    recommendation: Optional[str] = None
+    regulation_refs: list[RegulationReference] = []
+    evidences: list[IssueEvidenceResponse] = []
+    status: str
+    created_at: datetime
 
 
-# ─── SSE 이벤트 ──────────────────────────────────────────────────────────────
-
-class SSEEventType(str, Enum):
-    started = "started"
-    step = "step"
-    issue_found = "issue_found"
-    doc_done = "doc_done"
-    job_done = "job_done"
-    error = "error"
+class ApprovalLineResponse(BaseSchema):
+    review_run_id: int
+    required: bool
+    rule_id: Optional[int] = None
+    rule_name: Optional[str] = None
+    steps: list[str] = []
+    reference_text: Optional[str] = None
 
 
-class SSEEvent(BaseModel):
-    event: SSEEventType
-    job_id: str
-    doc_id: Optional[str] = None
-    doc_name: Optional[str] = None
-    message: str = ""
-    step: Optional[str] = None
-    progress: float = 0.0
-    issue: Optional[ReviewIssue] = None
-    result: Optional[DocumentReviewResult] = None
+class ReviewRunDocumentResponse(BaseSchema):
+    document_id: int
+    original_filename: str
+    role_in_review: Optional[str] = None
+    doc_type_confirmed: Optional[DocumentType] = None
+    parse_status: ParseStatus
 
 
-# ─── 검토 시작 요청 ──────────────────────────────────────────────────────────
-
-class ReviewStartRequest(BaseModel):
-    documents: list[DocumentUploadItem]
+class ReviewRunDocumentsResponse(BaseSchema):
+    review_run_id: int
+    items: list[ReviewRunDocumentResponse]
