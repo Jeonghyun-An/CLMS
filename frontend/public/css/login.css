@@ -1,0 +1,26 @@
+.login_wrap{ width: 100%; min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 2rem 1rem; background: url("../img/login/bg_login.jpg") no-repeat center / cover}
+.login_box{ width: 100%; max-width: 46rem; padding: 3rem 2rem 3.5rem; background: #fff; border-radius: 1.5rem; box-shadow: 0 0 1rem 0 #EBEAEA26; display: flex; justify-content: center}
+.login_box_inn{ width: 21rem; max-width: 100%}
+.login_logo{ text-align: center; margin-bottom: 2.5rem;}
+.login_tit{ text-align: center; font-weight: 600; font-size: 1.6rem; margin-bottom: 1.5rem; color: #000;}
+
+.login_input_wrap{ display: flex; flex-flow: column; gap: 1.5rem; width: 100%; position: relative; padding-bottom: 3rem;}
+.login_input_wrap .login_id{ width: 100%}
+.login_input_wrap .login_pw{ width: 100%}
+.login_input_wrap .login_input_tit{ font-size: 0.7rem; font-weight: 400; color: #000; margin-bottom: 0.5rem; display: block}
+.login_input_wrap .login_input_box{ width: 100%; position: relative}
+.login_input_wrap .login_input_box input{ width: 100%}
+.login_input_wrap .login_pw .login_input_box input{ padding-right: 2rem;}
+.login_input_wrap .login_input_box .view_pw{ width: 1rem; height: 1rem; background: url("../img/icon/ic_pw_view_off.svg") no-repeat center / contain; position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%)}
+.login_input_wrap .login_input_box .view_pw.on{ background-image: url("../img/icon/ic_pw_view_on.svg")}
+.login_input_wrap .login_id.error .login_input_box input,
+.login_input_wrap .login_pw.error .login_input_box input{ border: 1px solid var(--red);}
+.login_input_wrap .error_msg { color: var(--red); display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.65rem; font-weight: 300; position: absolute; left: 0; bottom: 0; width: 100%; height: 3rem; padding-top: 0.5rem;}
+.login_input_wrap .error_msg img { width: 0.75rem; position: relative; top: 0.15em}
+.login_btn{ width: 100%; margin-bottom: 1rem;}
+.login_util_wrap{ width: 100%; display: flex; align-items: center; justify-content: space-between}
+.login_util_list{ display: inline-flex; align-items: center; }
+.login_util_list .login_util_item{ display: inline-flex; align-items: center; font-size: 0.7rem; font-weight: 500; color: #000;}
+.login_util_list .login_util_item:before{ content: ""; width: 1px; height: 1em; border-left: 1px solid #ccc; margin: 0 1rem}
+.login_util_list .login_util_item:first-child:before{ display: none;}
+.login_util_list .login_util_item a:hover{ text-decoration: underline; text-underline-position: under}

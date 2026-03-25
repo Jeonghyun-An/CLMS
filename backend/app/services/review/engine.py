@@ -4,7 +4,7 @@
 입력:  ParsedDocument (텍스트 + 페이지별 블록 목록)
 출력:  List[ReviewIssue]  (이슈 카드 1개 = 딕셔너리)
 
-OCR 후배가 넘겨주는 포맷 기준:
+OCR 넘겨주는 포맷 기준:
   {
     "document_id": int,
     "pages": [
@@ -50,7 +50,6 @@ class ParsedDocument:
 
     @classmethod
     def from_ocr_json(cls, ocr_data: dict) -> "ParsedDocument":
-        """OCR 후배가 넘겨주는 JSON → ParsedDocument 변환"""
         doc = cls(document_id=ocr_data["document_id"])
         for page in ocr_data.get("pages", []):
             page_no = page["page_no"]

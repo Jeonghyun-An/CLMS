@@ -42,6 +42,7 @@ class IssueCategory(str, Enum):
     approval_rule = "approval_rule"
     checklist_fail = "checklist_fail"
     table_validation = "table_validation"
+    typo = "typo"
 
 
 class RegulationType(str, Enum):

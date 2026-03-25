@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 
 from fastapi import APIRouter, File, Form, Query, UploadFile, status
@@ -26,56 +27,76 @@ from app.schemas.enums import DocumentType, FileFormat, ParseStatus
 
 router = APIRouter()
 
+# 문서 메타 저장소 (upload 시 저장)
+_document_store: dict[int, dict] = {}
+_store_lock = threading.Lock()
+
+
+def register_document(doc_id: int, meta: dict):
+    """upload_review에서 호출 — 문서 메타 등록"""
+    with _store_lock:
+        _document_store[doc_id] = meta
+
+
+def _get_file_format(filename: str) -> FileFormat:
+    ext = filename.lower().rsplit(".", 1)[-1]
+    return {
+        "pdf":  FileFormat.pdf,
+        "hwpx": FileFormat.hwpx,
+        "hwp":  FileFormat.hwp,
+        "xlsx": FileFormat.xlsx,
+        "docx": FileFormat.docx,
+    }.get(ext, FileFormat.pdf)
+
+
+def _get_doc_type(doc_type_str: str) -> DocumentType:
+    return {
+        "bid_notice":       DocumentType.bid_document,
+        "proposal_request": DocumentType.proposal,
+        "plan":             DocumentType.plan,
+    }.get(doc_type_str, DocumentType.unknown)
+
+
+# ──────────────────────────────────────────────
+# 문서 업로드 (메타 등록용 — 실제 파일 처리는 upload_review)
+# ──────────────────────────────────────────────
 
 @router.post(
     "/projects/{project_id}/documents",
     response_model=BaseResponse[DocumentUploadResponse],
     status_code=status.HTTP_201_CREATED,
-    summary="문서 업로드",
-    description="프로젝트에 문서를 업로드합니다. 현재는 Swagger 확인용 mock 응답입니다.",
+    summary="문서 업로드 (메타 등록)",
 )
 async def upload_documents(
     project_id: int,
-    files: list[UploadFile] = File(..., description="업로드할 문서 파일들"),
-    document_group_name: str | None = Form(None, description="문서 그룹명"),
+    files: list[UploadFile] = File(...),
+    document_group_name: str | None = Form(None),
 ) -> BaseResponse[DocumentUploadResponse]:
     items = []
     for idx, file in enumerate(files, start=1):
-        filename_lower = file.filename.lower()
-        if filename_lower.endswith(".pdf"):
-            file_format = FileFormat.pdf
-        elif filename_lower.endswith(".hwpx"):
-            file_format = FileFormat.hwpx
-        elif filename_lower.endswith(".hwp"):
-            file_format = FileFormat.hwp
-        elif filename_lower.endswith(".xlsx"):
-            file_format = FileFormat.xlsx
-        else:
-            file_format = FileFormat.docx
-
-        items.append(
-            DocumentUploadItemResponse(
-                id=idx,
-                project_id=project_id,
-                original_filename=file.filename,
-                file_format=file_format,
-                mime_type=file.content_type or "application/octet-stream",
-                file_size=0,
-                doc_type_predicted=DocumentType.unknown,
-                doc_type_confirmed=None,
-                parse_status=ParseStatus.pending,
-                uploaded_at=datetime.now(),
-            )
-        )
-
+        items.append(DocumentUploadItemResponse(
+            id=idx,
+            project_id=project_id,
+            original_filename=file.filename,
+            file_format=_get_file_format(file.filename),
+            mime_type=file.content_type or "application/octet-stream",
+            file_size=0,
+            doc_type_predicted=DocumentType.unknown,
+            doc_type_confirmed=None,
+            parse_status=ParseStatus.pending,
+            uploaded_at=datetime.now(),
+        ))
     return BaseResponse(data=DocumentUploadResponse(items=items))
 
+
+# ──────────────────────────────────────────────
+# 문서 목록 — review_store files 기반
+# ──────────────────────────────────────────────
 
 @router.get(
     "/projects/{project_id}/documents",
     response_model=BaseResponse[DocumentListResponse],
-    summary="프로젝트 문서 목록 조회",
-    description="프로젝트에 속한 문서 목록을 조회합니다.",
+    summary="프로젝트 문서 목록",
 )
 async def list_project_documents(
     project_id: int,
@@ -84,207 +105,123 @@ async def list_project_documents(
     parse_status: ParseStatus | None = Query(None),
     doc_type: DocumentType | None = Query(None),
     keyword: str | None = Query(None),
+    review_run_id: int | None = Query(None, description="검토 실행 ID로 필터"),
 ) -> BaseResponse[DocumentListResponse]:
-    items = [
-        DocumentListItemResponse(
-            id=1001,
-            original_filename="계획서.hwpx",
-            file_format=FileFormat.hwpx,
-            file_size=102400,
-            doc_type_predicted=DocumentType.plan,
-            doc_type_confirmed=doc_type or DocumentType.plan,
-            parse_status=parse_status or ParseStatus.done,
-            uploaded_by=1,
-            uploaded_at=datetime.now(),
-        )
-    ]
-    data = DocumentListResponse(
-        items=items,
-        meta=PaginationMeta(page=page, size=size, total=1, total_pages=1),
-    )
-    return BaseResponse(data=data)
+    items = []
 
+    # review_run_id 있으면 해당 검토의 파일 목록
+    if review_run_id:
+        from app.api.reviews import _get_review
+        review = _get_review(review_run_id)
+        if review:
+            for f in review.get("files", []):
+                items.append(DocumentListItemResponse(
+                    id=f["document_id"],
+                    original_filename=f["filename"],
+                    file_format=_get_file_format(f["filename"]),
+                    file_size=0,
+                    doc_type_predicted=_get_doc_type(f.get("doc_type", "")),
+                    doc_type_confirmed=_get_doc_type(f.get("doc_type", "")),
+                    parse_status=ParseStatus.done,
+                    uploaded_by=1,
+                    uploaded_at=datetime.now(),
+                ))
+    else:
+        # _document_store에서 가져오기
+        for doc_id, meta in _document_store.items():
+            items.append(DocumentListItemResponse(
+                id=doc_id,
+                original_filename=meta.get("filename", ""),
+                file_format=_get_file_format(meta.get("filename", "")),
+                file_size=meta.get("file_size", 0),
+                doc_type_predicted=_get_doc_type(meta.get("doc_type", "")),
+                doc_type_confirmed=_get_doc_type(meta.get("doc_type", "")),
+                parse_status=ParseStatus.done,
+                uploaded_by=1,
+                uploaded_at=datetime.fromisoformat(meta.get("uploaded_at", datetime.now().isoformat())),
+            ))
+
+    total = len(items)
+    start = (page - 1) * size
+    paged = items[start:start + size]
+
+    return BaseResponse(data=DocumentListResponse(
+        items=paged,
+        meta=PaginationMeta(page=page, size=size, total=total,
+                            total_pages=max(1, (total + size - 1) // size)),
+    ))
+
+
+# ──────────────────────────────────────────────
+# 문서 상세
+# ──────────────────────────────────────────────
 
 @router.get(
-    "/documents/{document_id}",
+    "/projects/{project_id}/documents/{document_id}",
     response_model=BaseResponse[DocumentDetailResponse],
-    summary="문서 상세 조회",
-    description="문서 상세 메타데이터를 조회합니다.",
+    summary="문서 상세",
 )
-async def get_document(document_id: int) -> BaseResponse[DocumentDetailResponse]:
-    data = DocumentDetailResponse(
+async def get_document(project_id: int, document_id: int) -> BaseResponse[DocumentDetailResponse]:
+    meta = _document_store.get(document_id)
+
+    if not meta:
+        # review_store에서 찾기
+        try:
+            from app.services.storage.redis_store import get_client
+            import json
+            keys = get_client().keys("clms:review:*")
+            for k in keys:
+                if ":" not in k[len("clms:review:"):]:
+                    raw = get_client().get(k)
+                    if raw:
+                        review = json.loads(raw)
+                        for f in review.get("files", []):
+                            if f.get("document_id") == document_id:
+                                meta = f
+                                break
+                if meta:
+                    break
+        except Exception:
+            pass
+
+    if not meta:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
+
+    filename = meta.get("filename", "")
+    return BaseResponse(data=DocumentDetailResponse(
         id=document_id,
-        project_id=1,
-        original_filename="계획서.hwpx",
-        stored_path="/data/documents/plan_001.hwpx",
-        file_format=FileFormat.hwpx,
-        mime_type="application/octet-stream",
-        file_size=102400,
-        doc_type_predicted=DocumentType.plan,
-        doc_type_confirmed=DocumentType.plan,
+        project_id=project_id,
+        original_filename=filename,
+        stored_path=f"/data/clms_seocho/{filename}",
+        file_format=_get_file_format(filename),
+        mime_type="application/pdf",
+        file_size=meta.get("file_size", 0),
+        doc_type_predicted=_get_doc_type(meta.get("doc_type", "")),
+        doc_type_confirmed=_get_doc_type(meta.get("doc_type", "")),
         parse_status=ParseStatus.done,
-        page_count=12,
-        entity_count=8,
-        table_count=2,
+        page_count=meta.get("page_count", 0),
+        entity_count=0,
+        table_count=0,
         uploaded_by=1,
         uploaded_at=datetime.now(),
-    )
-    return BaseResponse(data=data)
+    ))
 
 
 @router.patch(
-    "/documents/{document_id}/doc-type",
+    "/projects/{project_id}/documents/{document_id}/doc-type",
     response_model=BaseResponse[DocumentTypeUpdateResponse],
     summary="문서 유형 수정",
-    description="자동 분류된 문서 유형을 사용자가 확정/수정합니다.",
 )
 async def update_document_type(
+    project_id: int,
     document_id: int,
     body: DocumentTypeUpdateRequest,
 ) -> BaseResponse[DocumentTypeUpdateResponse]:
-    data = DocumentTypeUpdateResponse(
+    if document_id in _document_store:
+        _document_store[document_id]["doc_type"] = body.doc_type_confirmed
+    return BaseResponse(data=DocumentTypeUpdateResponse(
         id=document_id,
         doc_type_predicted=DocumentType.unknown,
         doc_type_confirmed=body.doc_type_confirmed,
         updated_at=datetime.now(),
-    )
-    return BaseResponse(data=data)
-
-
-@router.get(
-    "/documents/{document_id}/structure",
-    response_model=BaseResponse[DocumentStructureResponse],
-    summary="문서 구조 조회",
-    description="페이지/블록 구조를 조회합니다.",
-)
-async def get_document_structure(document_id: int) -> BaseResponse[DocumentStructureResponse]:
-    data = DocumentStructureResponse(
-        document_id=document_id,
-        pages=[
-            DocumentPageResponse(
-                id=1,
-                page_no=1,
-                width=595.0,
-                height=842.0,
-                image_path="/data/pages/doc_1_page_1.png",
-                blocks=[
-                    DocumentBlockResponse(
-                        id=1,
-                        block_type="title",
-                        block_order=1,
-                        text="용역 계획서",
-                        bbox=BBox(x1=100, y1=100, x2=320, y2=145),
-                        structure_path="1.title.1",
-                    ),
-                    DocumentBlockResponse(
-                        id=2,
-                        block_type="paragraph",
-                        block_order=2,
-                        text="본 사업의 추진 배경 및 목적은 다음과 같다.",
-                        bbox=BBox(x1=100, y1=180, x2=500, y2=240),
-                        structure_path="1.paragraph.1",
-                    ),
-                ],
-            )
-        ],
-    )
-    return BaseResponse(data=data)
-
-
-@router.get(
-    "/documents/{document_id}/entities",
-    response_model=BaseResponse[DocumentEntitiesResponse],
-    summary="문서 엔티티 조회",
-    description="문서에서 추출한 핵심 항목을 조회합니다.",
-)
-async def get_document_entities(document_id: int) -> BaseResponse[DocumentEntitiesResponse]:
-    data = DocumentEntitiesResponse(
-        document_id=document_id,
-        items=[
-            ExtractedEntityResponse(
-                id=1,
-                entity_type="title",
-                entity_label="문서명",
-                entity_value="용역 계획서",
-                normalized_value="용역 계획서",
-                confidence=0.99,
-                source_page_no=1,
-                source_block_id=1,
-                bbox=BBox(x1=100, y1=100, x2=320, y2=145),
-            ),
-            ExtractedEntityResponse(
-                id=2,
-                entity_type="amount",
-                entity_label="총사업비",
-                entity_value="120,000,000원",
-                normalized_value="120000000",
-                confidence=0.95,
-                source_page_no=2,
-                source_block_id=7,
-                bbox=BBox(x1=120, y1=410, x2=300, y2=440),
-            ),
-        ],
-    )
-    return BaseResponse(data=data)
-
-
-@router.get(
-    "/documents/{document_id}/tables",
-    response_model=BaseResponse[DocumentTablesResponse],
-    summary="문서 표 조회",
-    description="문서 내 표 구조 및 셀 정보를 조회합니다.",
-)
-async def get_document_tables(document_id: int) -> BaseResponse[DocumentTablesResponse]:
-    data = DocumentTablesResponse(
-        document_id=document_id,
-        items=[
-            DocumentTableResponse(
-                id=1,
-                page_id=2,
-                table_order=1,
-                title="산출내역서",
-                row_count=2,
-                col_count=3,
-                cells=[
-                    TableCellResponse(
-                        id=1,
-                        row_index=1,
-                        col_index=1,
-                        cell_address="A1",
-                        text="항목명",
-                        rowspan=1,
-                        colspan=1,
-                    ),
-                    TableCellResponse(
-                        id=2,
-                        row_index=1,
-                        col_index=2,
-                        cell_address="B1",
-                        text="수량",
-                        rowspan=1,
-                        colspan=1,
-                    ),
-                    TableCellResponse(
-                        id=3,
-                        row_index=1,
-                        col_index=3,
-                        cell_address="C1",
-                        text="금액",
-                        rowspan=1,
-                        colspan=1,
-                    ),
-                ],
-            )
-        ],
-    )
-    return BaseResponse(data=data)
-
-
-@router.delete(
-    "/documents/{document_id}",
-    response_model=BaseResponse[DeleteResponse],
-    summary="문서 삭제",
-    description="문서를 삭제합니다.",
-)
-async def delete_document(document_id: int) -> BaseResponse[DeleteResponse]:
-    return BaseResponse(data=DeleteResponse(deleted=True, id=document_id))
+    ))

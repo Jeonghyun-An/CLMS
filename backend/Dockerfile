@@ -19,9 +19,9 @@ RUN --mount=type=cache,target=/var/cache/apt \
       libglib2.0-0 \
       libgl1 \
       curl \
-      ca-certificates; \
+      ca-certificates \
+      fonts-nanum; \
     rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
 
 # # torch — cu124 빌드 (CUDA 12.8 forward compatible)

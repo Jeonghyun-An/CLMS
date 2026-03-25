@@ -51,19 +51,38 @@ from app.services.review.engine import (
 router = APIRouter()
 
 # ──────────────────────────────────────────────
-# 인메모리 저장소 (PoC용 — DB 없이 동작)
+# 저장소 — 인메모리 (1차) + Redis (영속)
 # ──────────────────────────────────────────────
-# { review_run_id: { "status": ..., "issues": [...], "document_id": int } }
 _review_store: dict[int, dict[str, Any]] = {}
 _review_counter = 0
 _store_lock = threading.Lock()
 
 
+def _get_review(run_id: int) -> dict | None:
+    """인메모리 우선, 없으면 Redis에서 복원"""
+    if run_id in _review_store:
+        return _review_store[run_id]
+    try:
+        from app.services.storage.redis_store import load_review
+        data = load_review(run_id)
+        if data:
+            with _store_lock:
+                _review_store[run_id] = data
+            return data
+    except Exception:
+        pass
+    return None
+
+
 def _next_run_id() -> int:
-    global _review_counter
-    with _store_lock:
-        _review_counter += 1
-        return _review_counter
+    try:
+        from app.services.storage.redis_store import next_review_id
+        return next_review_id()
+    except Exception:
+        global _review_counter
+        with _store_lock:
+            _review_counter += 1
+            return _review_counter
 
 
 # ──────────────────────────────────────────────
@@ -103,23 +122,46 @@ async def create_review(
     run_id = _next_run_id()
     doc_id = body.document_ids[0] if body.document_ids else 1001
 
-    # OCR 데이터가 있으면 실제 엔진, 없으면 샘플로 실행
+    # ── full_text 추출
+    filename = ""
     if ocr_data:
-        ocr_data["document_id"] = doc_id
-        issues_raw = run_review_from_ocr(ocr_data)
+        from app.services.review.ocr_adapter import adapt
+        filename    = ocr_data.get("filename", "") if isinstance(ocr_data, dict) else ""
+        adapted_doc = adapt(ocr_data if isinstance(ocr_data, list) else ocr_data, doc_id)
+        full_text   = "\n".join(b.text for b in adapted_doc.blocks)
     else:
-        issues_raw = run_review(_make_sample_document(doc_id))
+        sample    = _make_sample_document(doc_id)
+        full_text = "\n".join(b.text for b in sample.blocks)
 
-    issues_serialized = issues_to_api_response(issues_raw, run_id, doc_id)
+    # ── 문서 타입 자동 감지
+    from app.services.review.doc_type_dispatcher import detect_doc_type
+    doc_type = detect_doc_type(full_text, filename)
 
+    # ── 하이브리드 실행 (룰 엔진 + vLLM) — await 직접 호출 (uvloop 호환)
+    use_llm = body.options.run_consistency_check
+    from app.services.review.vllm_reviewer import run_hybrid_review
+    issues_serialized = await run_hybrid_review(
+        full_text=full_text,
+        document_id=doc_id,
+        review_run_id=run_id,
+        use_llm=use_llm,
+        doc_type=doc_type,
+    )
+
+    data = {
+        "status":      ReviewStatus.completed,
+        "document_id": doc_id,
+        "issues":      issues_serialized,
+        "started_at":  datetime.now().isoformat(),
+        "finished_at": datetime.now().isoformat(),
+    }
     with _store_lock:
-        _review_store[run_id] = {
-            "status": ReviewStatus.completed,
-            "document_id": doc_id,
-            "issues": issues_serialized,
-            "started_at": datetime.now().isoformat(),
-            "finished_at": datetime.now().isoformat(),
-        }
+        _review_store[run_id] = data
+    try:
+        from app.services.storage.redis_store import save_review
+        save_review(run_id, dict(data))
+    except Exception as e:
+        print(f"[Redis] 저장 실패 (인메모리 유지): {e}")
 
     return BaseResponse(
         data=ReviewCreateResponse(
@@ -137,7 +179,7 @@ async def create_review(
     summary="검토 상태 조회",
 )
 async def get_review_status(review_run_id: int) -> BaseResponse[ReviewStatusResponse]:
-    store = _review_store.get(review_run_id)
+    store = _get_review(review_run_id)
     return BaseResponse(
         data=ReviewStatusResponse(
             review_run_id=review_run_id,
@@ -156,7 +198,7 @@ async def get_review_status(review_run_id: int) -> BaseResponse[ReviewStatusResp
     summary="검토 요약",
 )
 async def get_review_summary(review_run_id: int) -> BaseResponse[ReviewSummaryResponse]:
-    store = _review_store.get(review_run_id)
+    store = _get_review(review_run_id)
     issues = store["issues"] if store else []
 
     counts = {"high": 0, "critical": 0, "warning": 0, "info": 0}
@@ -210,7 +252,7 @@ async def get_review_issues(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ) -> BaseResponse[ReviewIssueListResponse]:
-    store = _review_store.get(review_run_id)
+    store = _get_review(review_run_id)
     all_issues = store["issues"] if store else []
 
     # 필터
@@ -260,7 +302,7 @@ async def get_review_issue_detail(
     review_run_id: int,
     issue_id: int,
 ) -> BaseResponse[ReviewIssueDetailResponse]:
-    store = _review_store.get(review_run_id)
+    store = _get_review(review_run_id)
     if not store:
         raise HTTPException(status_code=404, detail="검토 결과를 찾을 수 없습니다.")
 
@@ -314,7 +356,7 @@ async def get_review_issue_detail(
     summary="결재선 안내",
 )
 async def get_approval_line(review_run_id: int) -> BaseResponse[ApprovalLineResponse]:
-    store = _review_store.get(review_run_id)
+    store = _get_review(review_run_id)
     issues = store["issues"] if store else []
 
     # R030 (고액 결재선) 이슈 여부로 결재선 결정
@@ -345,7 +387,7 @@ async def get_approval_line(review_run_id: int) -> BaseResponse[ApprovalLineResp
     summary="검토 대상 문서 목록",
 )
 async def get_review_documents(review_run_id: int) -> BaseResponse[ReviewRunDocumentsResponse]:
-    store = _review_store.get(review_run_id)
+    store = _get_review(review_run_id)
     doc_id = store["document_id"] if store else 1001
 
     return BaseResponse(

@@ -169,6 +169,8 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
     volumes:
       - /data/models/.hf-cache:/models:rw
+      - /data/ocr_results:/data/ocr_results:rw
+      - /data/clms_seocho:/data/clms_seocho:rw
     ports:
       - "18002:8000"
     depends_on:

@@ -52,3 +52,6 @@ passlib[bcrypt]==1.7.4
 
 # HTTP
 httpx==0.28.1
+
+nest_asyncio==1.5.8
+reportlab==4.2.5
