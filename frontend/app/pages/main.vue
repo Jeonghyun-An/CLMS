@@ -1,5 +1,8 @@
 <template>
   <div class="contents_wrap" id="contents_wrap">
+    <ul class="skip_menu">
+      <li><a href="#contents_wrap">본문 바로가기</a></li>
+    </ul>
     <!-- 헤더 -->
     <div class="header">
       <div class="left">
@@ -22,16 +25,127 @@
         </div>
       </div>
       <div class="right">
-        <button class="btn sz_s btn_ty05" @click="goReview">
+        <!-- 멤버 목록 -->
+        <div class="trigger_wrap member_trigger_wrap" id="member_trigger_wrap">
+          <a href="#;" class="trigger member_trigger" id="member_trigger">
+            3명 참여<img src="/img/icon/ic_member.svg" alt="" />
+          </a>
+          <div
+            class="trigger_toggle member_trigger_toggle"
+            id="member_trigger_toggle"
+          >
+            <div class="member_trigger_list">
+              <a href="#;" class="member_trigger_item">
+                <div class="member_trigger_item_inn">
+                  <div class="name_wrap">
+                    <div class="img_wrap">
+                      <img src="/img/layout/img_profile_01.svg" alt="" />
+                    </div>
+                    <div class="name">최승환</div>
+                  </div>
+                  <div class="position">스마트도시과 / 주무관</div>
+                </div>
+              </a>
+              <a href="#;" class="member_trigger_item">
+                <div class="member_trigger_item_inn">
+                  <div class="name_wrap">
+                    <div class="img_wrap">
+                      <img src="/img/layout/img_profile_02.svg" alt="" />
+                    </div>
+                    <div class="name">홍길동</div>
+                  </div>
+                  <div class="position">스마트도시과 / 팀장</div>
+                </div>
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- 신규 버튼 -->
+        <a href="#;" class="btn sz_s btn_ty05" @click.prevent="goReview">
           <img src="/img/icon/ic_plus_w.svg" alt="" />신규
-        </button>
+        </a>
+
+        <!-- 관리자 버튼 -->
+        <a href="#;" class="btn sz_s btn_ty04">
+          <img src="/img/icon/ic_admin.svg" alt="" class="ic_color" />관리자
+        </a>
+
+        <!-- 공유 -->
+        <div class="trigger_wrap share_trigger_wrap" id="share_trigger_wrap">
+          <a
+            href="#;"
+            class="btn sz_s btn_ty04 trigger share_trigger"
+            id="share_trigger"
+          >
+            <img src="/img/icon/ic_share.svg" alt="" class="ic_color" />공유
+          </a>
+          <div
+            class="trigger_toggle share_trigger_toggle"
+            id="share_trigger_toggle"
+          >
+            <div class="share_trigger_tit_wrap">
+              <div class="share_trigger_tit">해당 파일 공유</div>
+              <a
+                href="#;"
+                aria-label="공유 닫기"
+                class="share_trigger_close trigger_close"
+                data-target="share_trigger"
+                @click.prevent="closeTrigger('share_trigger')"
+              >
+                <img src="/img/icon/ic_close.svg" alt="" />
+              </a>
+            </div>
+            <div class="add_member">
+              <input
+                type="text"
+                class="add_member_input"
+                placeholder="사용자 및 그룹 추가"
+              />
+              <button class="add_member_btn btn sz_s sq">초대</button>
+            </div>
+            <div class="is_accessible">엑세스 권한이 있는 사람</div>
+            <div class="share_trigger_list">
+              <div
+                v-for="(m, i) in shareMembers"
+                :key="i"
+                class="share_trigger_item"
+              >
+                <div class="share_trigger_item_inn">
+                  <a href="#;" class="name_wrap">
+                    <div class="img_wrap">
+                      <img
+                        :src="`/img/layout/img_profile_0${(i % 3) + 1}.svg`"
+                        alt=""
+                      />
+                    </div>
+                    <div class="name">{{ m.name }}</div>
+                  </a>
+                  <div class="select_box">
+                    <select>
+                      <option>소유자</option>
+                      <option selected>볼 수 있음</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 메뉴 버튼 -->
+        <a href="/library" class="btn sz_s hover_bg_01 btn_menu">
+          <img src="/img/icon/ic_menu.svg" aria-label="메뉴" alt="" />
+        </a>
+
+        <!-- 내 계정 -->
         <div
-          class="trigger_wrap member_util_trigger_wrap"
+          class="member_util_wrap trigger_wrap"
           id="member_util_trigger_wrap"
         >
           <a
             href="#;"
-            class="trigger member_util_trigger"
+            class="btn sz_s hover_bg_01 trigger member_util_trigger"
             id="member_util_trigger"
           >
             <img src="/img/layout/img_profile_01.svg" alt="" />
@@ -42,12 +156,61 @@
           >
             <div class="member_wrap">
               <div class="member_info">
-                <div class="member_name">서초구청 담당자 님</div>
+                <div class="member_name">서초구청 님</div>
+                <div class="member_email ellipsis">seocho@seoul.go.kr</div>
               </div>
-              <a href="#;" class="logout btn" @click="logout">
+              <a href="#;" class="logout btn" @click.prevent="logout">
                 <img src="/img/icon/ic_logout.svg" alt="" />로그아웃
               </a>
             </div>
+            <ul class="member_util_list">
+              <li class="member_util_item">
+                <a href="#;" class="util_item_inn">
+                  <span class="ic ic_bookmark"></span>
+                  <span class="txt">내 즐겨찾기</span>
+                </a>
+              </li>
+              <li class="member_util_item">
+                <a href="#;" class="util_item_inn">
+                  <span class="ic ic_history"></span>
+                  <span class="txt">내 검색기록</span>
+                </a>
+              </li>
+              <li
+                class="member_util_item lang_trigger_wrap trigger_wrap"
+                id="lang_trigger_wrap"
+              >
+                <a href="#;" class="util_item_inn trigger" id="lang_trigger">
+                  <span class="ic ic_lang"></span>
+                  <span class="txt"
+                    >표시언어: <span class="fw_b lang">한국어</span></span
+                  >
+                </a>
+                <div
+                  class="trigger_toggle lang_trigger_toggle"
+                  id="lang_trigger_toggle"
+                >
+                  <div class="lang_trigger_toggle_hd">
+                    <img src="/img/icon/ic_lang.svg" alt="" />표시언어
+                  </div>
+                  <ul class="lang_list">
+                    <li class="lang_item">
+                      <a href="#;" class="inn">English</a>
+                    </li>
+                    <li class="lang_item on">
+                      <a href="#;" class="inn">한국어</a>
+                    </li>
+                  </ul>
+                  <a
+                    href="#;"
+                    class="btn bg_black sz_md trigger_close"
+                    data-target="lang_trigger"
+                    @click.prevent="closeTrigger('lang_trigger')"
+                    >취소</a
+                  >
+                </div>
+              </li>
+            </ul>
           </div>
         </div>
       </div>
@@ -108,7 +271,11 @@
           </div>
           <div class="source_list_wrap">
             <div class="source_list">
-              <div v-if="!selectedFiles.length" class="empty_wrap">
+              <div
+                v-if="!selectedFiles.length"
+                class="empty_wrap"
+                style="padding: 20px; text-align: center"
+              >
                 <div class="ic_wrap">
                   <img src="/img/icon/ic_empty_source.svg" alt="" />
                 </div>
@@ -300,6 +467,21 @@ const isLoading = ref(false);
 const loadingText = ref("문서 검토중...");
 const loadingProgress = ref(0);
 const fileInputMain = ref<HTMLInputElement>();
+
+const shareMembers = ref([
+  { name: "누구나" },
+  { name: "최승환" },
+  { name: "홍길동" },
+]);
+
+function closeTrigger(id: string) {
+  const wrap = document.getElementById(id + "_wrap");
+  const toggle = document.getElementById(id + "_toggle");
+  const el = document.getElementById(id);
+  if (wrap) wrap.classList.remove("open");
+  if (toggle) toggle.classList.remove("open");
+  if (el) el.classList.remove("open");
+}
 
 onMounted(() => {
   if (!localStorage.getItem("clms_logged_in")) router.push("/");

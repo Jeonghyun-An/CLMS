@@ -10,7 +10,7 @@
         </div>
         <div class="login_tit">로그인</div>
         <div class="login_input_wrap">
-          <div class="login_id">
+          <div class="login_id" :class="{ error: errorMsg }">
             <label class="login_input_tit" for="input_id">아이디</label>
             <div class="login_input_box">
               <input
@@ -23,7 +23,7 @@
               />
             </div>
           </div>
-          <div class="login_pw">
+          <div class="login_pw" :class="{ error: errorMsg }">
             <label class="login_input_tit" for="input_pw">비밀번호</label>
             <div class="login_input_box">
               <input
@@ -42,8 +42,9 @@
               ></button>
             </div>
           </div>
-          <div v-if="errorMsg" class="login_error_wrap">
-            <span class="login_error_txt">{{ errorMsg }}</span>
+          <div v-if="errorMsg" class="error_msg">
+            <img src="/img/icon/ic_error.svg" alt="" />
+            {{ errorMsg }}
           </div>
         </div>
         <button
