@@ -242,6 +242,9 @@
                 <img src="/img/icon/ic_panel_menu_close.svg" alt="" />
               </a>
             </div>
+            <a href="#;" class="btn sz_md sq btn_ty02 btn_full">
+              <img src="/img/icon/ic_plus_p.svg" alt="" /> 소스 추가
+            </a>
           </div>
           <div class="source_list_wrap">
             <div class="source_list">
@@ -274,9 +277,16 @@
                     >
                       <a href="#;" class="panel_item_tit_wrap" @click.prevent>
                         <div class="img_wrap">
-                          <img :src="fileIcon(f.filename)" alt="" />
+                          <img
+                            :src="
+                              fileIcon(f.original_filename || f.filename || '')
+                            "
+                            alt=""
+                          />
                         </div>
-                        <div class="tit ellipsis">{{ f.filename }}</div>
+                        <div class="tit ellipsis">
+                          {{ f.original_filename || f.filename }}
+                        </div>
                       </a>
                       <a
                         href="#;"
@@ -330,7 +340,9 @@
                 <div class="doc_tit">
                   <img src="/img/icon/ic_doc.svg" alt="" />
                   <span class="ellipsis">{{
-                    selectedDoc?.filename || "문서를 선택하세요"
+                    selectedDoc?.original_filename ||
+                    selectedDoc?.filename ||
+                    "문서를 선택하세요"
                   }}</span>
                 </div>
                 <div class="doc_page_wrap" v-if="currentPage">
@@ -346,6 +358,7 @@
                 <!-- PDF.js iframe + 하이라이트 오버레이 -->
                 <div v-else class="pdf_viewer_inner">
                   <iframe
+                    :key="`${selectedDocId}-${pdfViewerKey}`"
                     :id="`pdf-viewer-${selectedDocId}`"
                     :src="pdfViewerUrl"
                     class="pdf_iframe"
@@ -372,12 +385,18 @@
                 <div class="talk_ai_wrap" v-if="summary">
                   <div class="talk_doc_tit">
                     <img src="/img/icon/ic_doc.svg" alt="" />
-                    <div class="txt">{{ selectedDoc?.filename }}</div>
+                    <div class="txt">
+                      {{
+                        selectedDoc?.original_filename || selectedDoc?.filename
+                      }}
+                    </div>
                   </div>
                   <div class="talk_tit_01">묶음 문서 검토 결과</div>
                   <div class="talk_txt">
                     해당 계약 유형은 '<span class="fw_sb">{{
-                      docTypeLabel(selectedDoc?.doc_type)
+                      docTypeLabel(
+                        selectedDoc?.role_in_review || selectedDoc?.doc_type,
+                      )
                     }}</span
                     >' 입니다.
                   </div>
@@ -541,7 +560,12 @@
                 <div class="doc_ty_info_ic"></div>
                 <div class="doc_ty_info_txt">
                   <div class="tit">
-                    {{ docTypeLabel(selectedDoc?.doc_type) }} 문서입니다.
+                    {{
+                      docTypeLabel(
+                        selectedDoc?.role_in_review || selectedDoc?.doc_type,
+                      )
+                    }}
+                    문서입니다.
                   </div>
                 </div>
               </div>
@@ -574,16 +598,24 @@
             <!-- 이슈 카드 목록 -->
             <div class="result_list">
               <!-- 검토 전/결과 없음 -->
-              <div v-if="!currentDocIssues.length" class="empty_wrap">
+              <div
+                v-if="!isAbnormal || !currentDocIssues.length"
+                class="empty_wrap"
+              >
                 <div class="ic_wrap">
                   <img src="/img/icon/ic_empty_result.svg" alt="" />
                 </div>
                 <div class="txt_wrap">
-                  검토결과 출력이 여기에 저장됩니다.<br />
-                  소스를 추가한 후 클릭하여 내용을 확인하세요.
+                  <template v-if="!isAbnormal">
+                    검토 결과가 없습니다.
+                  </template>
+                  <template v-else>
+                    검토결과 출력이 여기에 저장됩니다.<br />
+                    소스를 추가한 후 클릭하여 내용을 확인하세요.
+                  </template>
                 </div>
               </div>
-              <div class="result_inn_list">
+              <div v-if="isAbnormal" class="result_inn_list">
                 <a
                   v-for="iss in currentDocIssues"
                   :key="iss.id"
@@ -690,6 +722,7 @@ const rroute = useRoute();
 const runId = computed(() => Number(rroute.params.id));
 
 const {
+  projectId,
   getDocuments,
   getIssues,
   getIssueSummary,
@@ -697,6 +730,7 @@ const {
   getChecklist,
   getApprovalLine,
   getReportDownloadUrl,
+  getPdfViewerUrl,
   chatStream,
 } = useApi();
 
@@ -712,6 +746,7 @@ const chatLength = ref("기본값");
 const docFiles = ref<any[]>([]);
 const selectedDoc = ref<any>(null);
 const selectedDocId = computed(() => selectedDoc.value?.document_id);
+const pdfViewerKey = ref(0); // PDF iframe 강제 리로드용 키
 const issues = ref<any[]>([]);
 const summary = ref<any>(null);
 const highlights = ref<any[]>([]);
@@ -732,56 +767,72 @@ const currentPage = ref(1);
 const totalPage = ref(1);
 const hoveredIssueId = ref<number | null>(null);
 const focusedIssueId = ref<number | null>(null);
-
+const isAbnormal = computed(() => {
+  const filename =
+    selectedDoc.value?.original_filename || selectedDoc.value?.filename || "";
+  return filename.includes("_비정상");
+});
 const reportDownloadUrl = computed(() => getReportDownloadUrl(runId.value));
 
-// PDF.js viewer URL — /pdfjs/web/viewer.html?file={PDF API URL}
+// PDF.js viewer URL
 const pdfViewerUrl = computed(() => {
   if (!selectedDoc.value) return "";
-  const pdfUrl = encodeURIComponent(
-    `/api/v1/projects/1/reviews/${runId.value}/pdf/${selectedDoc.value.document_id}`,
-  );
-  return `/pdfjs/web/viewer.html?file=${pdfUrl}`;
+  return getPdfViewerUrl(runId.value, selectedDoc.value.document_id);
 });
 
 // 하이라이트를 PdfHighlightOverlay 포맷으로 변환
 const overlayResults = computed(() =>
-  currentDocIssues.value
-    .filter((iss) => iss.highlights?.length)
-    .map((iss) => ({
+  highlights.value.map((h: any) => {
+    const issue = currentDocIssues.value.find((iss) => iss.id === h.issue_id);
+
+    return {
       score:
-        iss.severity === "critical"
+        issue?.severity === "critical"
           ? 0.95
-          : iss.severity === "high"
+          : issue?.severity === "high"
             ? 0.8
             : 0.6,
-      bbox_info: iss.highlights.map((h: any) => ({
-        page: h.page_no,
-        x0: h.bbox?.x1 ?? 0,
-        y0: h.bbox?.y1 ?? 0,
-        x1: h.bbox?.x2 ?? 0,
-        y1: h.bbox?.y2 ?? 0,
-      })),
+      bbox_info: [
+        {
+          page: h.page_no,
+          x0: h.bbox?.x1 ?? 0,
+          y0: h.bbox?.y1 ?? 0,
+          x1: h.bbox?.x2 ?? 0,
+          y1: h.bbox?.y2 ?? 0,
+          text: h.label || issue?.title || "",
+        },
+      ],
       article_bbox_info: [],
-      display_path: iss.title,
-      korean_text: iss.description,
-      _issue_id: iss.id,
-    })),
+      display_path: issue?.title || h.label || "",
+      korean_text: issue?.description || "",
+      _issue_id: h.issue_id,
+    };
+  }),
 );
 
-// ── 문서 카테고리 그룹핑
-const docGroups = computed(() => {
+// ── 문서 카테고리 그룹핑 (open 토글 반응성을 위해 ref 사용)
+const docGroups = ref<{ label: string; open: boolean; files: any[] }[]>([]);
+
+function buildDocGroups() {
   const groups: Record<string, { label: string; open: boolean; files: any[] }> =
     {};
   for (const f of docFiles.value) {
-    const label = docTypeLabel(f.doc_type);
-    if (!groups[label]) groups[label] = { label, open: true, files: [] };
+    const type = f.role_in_review || f.doc_type || "unknown"; // ← 폴백 추가
+    const label = docTypeLabel(type);
+    if (!groups[label]) {
+      const existing = docGroups.value.find((g) => g.label === label);
+      groups[label] = { label, open: existing?.open ?? true, files: [] };
+    }
     groups[label].files.push(f);
   }
-  return Object.values(groups);
-});
+  docGroups.value = Object.values(groups);
+}
 
-function fileIcon(filename: string) {
+watch(docFiles, buildDocGroups, { immediate: true });
+
+function fileIcon(filename?: string) {
+  if (!filename) return "/img/icon/ic_doc.svg";
+  if (filename.startsWith("http")) return "/img/icon/ic_file_link.svg";
   const ext = filename.split(".").pop()?.toLowerCase() || "";
   const map: Record<string, string> = {
     pdf: "/img/icon/ic_file_pdf.svg",
@@ -789,7 +840,12 @@ function fileIcon(filename: string) {
     hwpx: "/img/icon/ic_file_hwpx.svg",
     xlsx: "/img/icon/ic_file_xlsx.svg",
     xls: "/img/icon/ic_file_xlsx.svg",
+    csv: "/img/icon/ic_file_xlsx.svg",
     txt: "/img/icon/ic_file_txt.svg",
+    zip: "/img/icon/ic_file_upload.svg",
+    png: "/img/icon/ic_doc.svg",
+    jpg: "/img/icon/ic_doc.svg",
+    jpeg: "/img/icon/ic_doc.svg",
   };
   return map[ext] || "/img/icon/ic_doc.svg";
 }
@@ -813,6 +869,9 @@ const currentDocIssues = computed(() =>
 
 // ── 초기 로드
 onMounted(async () => {
+  const pid = Number(rroute.query.project_id || rroute.query.projectId || 1);
+  projectId.value = Number.isFinite(pid) && pid > 0 ? pid : 1;
+
   if (!localStorage.getItem("clms_logged_in")) {
     route.push("/");
     return;
@@ -844,9 +903,13 @@ async function loadAll() {
 
 async function selectDoc(f: any) {
   selectedDoc.value = f;
+  pdfViewerKey.value += 1;
   currentPage.value = 1;
   highlights.value = [];
   focusedIssueId.value = null;
+  chatHistory.value = [];
+  chatInput.value = "";
+  streamingText.value = "";
 
   // 하이라이트 로드
   try {
@@ -857,8 +920,30 @@ async function selectDoc(f: any) {
 }
 
 function onPdfIframeLoad() {
-  // iframe 로드 완료 — PdfHighlightOverlay가 자동으로 연결
   console.log("[PDF] iframe 로드 완료");
+
+  const iframe = document.getElementById(
+    `pdf-viewer-${selectedDocId.value}`,
+  ) as HTMLIFrameElement;
+
+  if (!iframe?.contentWindow) return;
+
+  const tryBind = () => {
+    try {
+      const pdfApp = (iframe.contentWindow as any).PDFViewerApplication;
+      const pagesCount = pdfApp?.pagesCount;
+      const current = pdfApp?.page;
+
+      if (pagesCount) totalPage.value = pagesCount;
+      if (current) currentPage.value = current;
+    } catch (e) {
+      console.warn("[PDF] 페이지 정보 읽기 실패", e);
+    }
+  };
+
+  setTimeout(tryBind, 300);
+  setTimeout(tryBind, 800);
+  setTimeout(tryBind, 1500);
 }
 
 function goToPage(pageNum: number) {
@@ -881,8 +966,11 @@ function goToPage(pageNum: number) {
 function onIssueClick(iss: any) {
   focusedIssueId.value = iss.id;
   activeTab.value = "doc";
+
   const hl = highlights.value.find((h) => h.issue_id === iss.id);
-  if (hl?.page_no) goToPage(hl.page_no);
+  if (hl?.page_no) {
+    goToPage(hl.page_no);
+  }
 }
 
 function onHighlightClick(_result: any, _rectInfo: any) {
@@ -971,7 +1059,11 @@ function docTypeLabel(t?: string) {
       bid_notice: "입찰공고문",
       proposal_request: "제안요청서",
       plan: "계획서",
-    }[t || ""] || "문서"
+      contract_draft: "계약서",
+      unknown: "기타",
+    }[t || ""] ||
+    t ||
+    "문서"
   );
 }
 function docTypeBadge(t?: string) {

@@ -186,15 +186,26 @@ const res = await fetch('/api/v1/projects/1/reviews/upload/stream', {
 )
 async def upload_and_review_stream(
     project_id: int,
-    files:   list[UploadFile] = File(..., description="PDF 파일들"),
-    use_llm: bool             = Form(True),
+    files:           list[UploadFile] = File(..., description="검토 파일들"),
+    use_llm:         bool             = Form(True),
+    file_categories: str              = Form("{}",  description="파일명→doc_type JSON"),
 ) -> StreamingResponse:
+
+    # 사용자가 지정한 카테고리 파싱
+    import json as _json
+    try:
+        _user_categories: dict[str, str] = _json.loads(file_categories)
+    except Exception:
+        _user_categories = {}
+
+    ALLOWED_EXT = {".pdf", ".hwp", ".hwpx", ".xlsx", ".xls", ".txt"}
 
     # 파일 검증 + 읽기
     file_list = []
     for f in files:
-        if not f.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail=f"{f.filename}: PDF만 지원합니다.")
+        ext = "." + f.filename.rsplit(".", 1)[-1].lower() if "." in f.filename else ""
+        if ext not in ALLOWED_EXT:
+            raise HTTPException(status_code=400, detail=f"{f.filename}: 지원하지 않는 형식입니다.")
         data = await f.read()
         if not data:
             raise HTTPException(status_code=400, detail=f"{f.filename}: 빈 파일입니다.")
@@ -277,7 +288,10 @@ async def upload_and_review_stream(
                     yield progress_queue.pop(0)
 
                 # OCR 결과 저장 (인메모리 + MinIO)
-                _ocr_store[run_id] = ocr_result
+                if run_id not in _ocr_store:
+                    _ocr_store[run_id] = {}
+                _ocr_store[run_id][doc_id] = ocr_result
+
                 from pathlib import Path
                 from app.services.storage.minio_client import save_ocr_cache, upload_pdf
                 _stem = Path(filename).stem
@@ -290,7 +304,14 @@ async def upload_and_review_stream(
                 # 어댑터 + 타입 감지
                 adapted   = adapt(ocr_result, doc_id)
                 full_text = "\n".join(b.text for b in adapted.blocks)
-                doc_type  = detect_doc_type(full_text, filename)
+
+                # 사용자 지정 카테고리 우선, 없으면 자동 감지
+                if filename in _user_categories and _user_categories[filename]:
+                    doc_type = _user_categories[filename]
+                    print(f"[Upload] {filename} → 사용자 지정 doc_type: {doc_type}")
+                else:
+                    doc_type = detect_doc_type(full_text, filename)
+                    print(f"[Upload] {filename} → 자동 감지 doc_type: {doc_type}")
 
                 # 검토 실행
                 issues = await run_hybrid_review(
@@ -315,6 +336,7 @@ async def upload_and_review_stream(
                 try:
                     from app.api.documents import register_document
                     register_document(doc_id, {
+                        "project_id":  project_id,
                         "filename":    filename,
                         "doc_type":    doc_type,
                         "document_id": doc_id,
@@ -348,6 +370,7 @@ async def upload_and_review_stream(
         )
 
         store_data = {
+            "project_id":   project_id,
             "status":      ReviewStatus.completed,
             "document_id": file_results[0]["document_id"] if file_results else 0,
             "issues":      all_issues,
@@ -363,7 +386,17 @@ async def upload_and_review_stream(
             save_review(run_id, dict(store_data))
         except Exception as e:
             print(f"[Redis] 저장 실패 (인메모리 유지): {e}")
+        try:
+            from app.api.projects import _get_project, _save_project
 
+            project = _get_project(project_id)
+            if project:
+                project["latest_review_id"] = run_id
+                project["latest_review_status"] = ReviewStatus.completed
+                project["updated_at"] = datetime.now().isoformat()
+                _save_project(project_id, project)
+        except Exception as e:
+            print(f"[Project] 최신 검토 상태 갱신 실패: {e}")
         yield sse("all_done", {
             "review_run_id": run_id,
             "total_issues":  len(all_issues),
@@ -381,7 +414,7 @@ async def upload_and_review_stream(
 # ──────────────────────────────────────────────
 # OCR 결과 저장소 (인메모리 + 파일 동시 저장)
 # ──────────────────────────────────────────────
-_ocr_store: dict[int, dict] = {}   # { review_run_id: ocr_result }
+_ocr_store: dict[int, dict[int, dict]] = {}   # { review_run_id: { document_id: ocr_result } }
 OCR_SAVE_DIR = os.getenv("OCR_SAVE_DIR", "/data/ocr_results")
 
 
@@ -422,30 +455,35 @@ async def get_ocr_result(
     page:          int  | None = None,
     text_only:     bool        = False,
 ):
-    ocr = _ocr_store.get(review_run_id)
+    from app.api.reviews import _get_review_in_project
+
+    review = _get_review_in_project(review_run_id, project_id)
+    if not review:
+        raise HTTPException(status_code=404, detail="해당 프로젝트의 검토 결과가 없습니다.")
+
+    files = review.get("files", [])
+    target_document_id = files[0]["document_id"] if files else None
+
+    ocr_map = _ocr_store.get(review_run_id, {})
+    ocr = ocr_map.get(target_document_id) if target_document_id is not None else None
 
     # 인메모리에 없으면 MinIO에서 복원
     if not ocr:
         try:
-            from app.api.reviews import _get_review
             from app.services.storage.minio_client import load_ocr_cache
             from pathlib import Path
 
-            review = _get_review(review_run_id)
-            if review:
-                files = review.get("files", [])
-                # 파일이 여러 개면 첫 번째 파일 기준 (page 파라미터로 특정 가능)
-                stems = []
-                if files:
-                    stems = [Path(f["filename"]).stem for f in files]
-                elif review.get("filename"):
-                    stems = [Path(review["filename"]).stem]
+            stems = [Path(f["filename"]).stem for f in files] if files else []
 
-                for stem in stems:
-                    cached = load_ocr_cache(stem)
-                    if cached:
-                        # run_id와 연결해서 인메모리 복원
-                        _ocr_store[review_run_id] = cached
+            for f in files:
+                stem = Path(f["filename"]).stem
+                cached = load_ocr_cache(stem)
+                if cached:
+                    if review_run_id not in _ocr_store:
+                        _ocr_store[review_run_id] = {}
+                    _ocr_store[review_run_id][f["document_id"]] = cached
+
+                    if f["document_id"] == target_document_id:
                         ocr = cached
                         print(f"[OCR] MinIO에서 복원: {stem}")
                         break
@@ -498,27 +536,37 @@ async def get_ocr_full_text(
     project_id:    int,
     review_run_id: int,
 ):
-    ocr = _ocr_store.get(review_run_id)
+    from app.api.reviews import _get_review_in_project
+
+    review = _get_review_in_project(review_run_id, project_id)
+    if not review:
+        raise HTTPException(status_code=404, detail="해당 프로젝트의 검토 결과가 없습니다.")
+
+    files = review.get("files", [])
+    target_document_id = files[0]["document_id"] if files else None
+
+    ocr_map = _ocr_store.get(review_run_id, {})
+    ocr = ocr_map.get(target_document_id) if target_document_id is not None else None
 
     if not ocr:
         try:
-            from app.api.reviews import _get_review
             from app.services.storage.minio_client import load_ocr_cache
             from pathlib import Path
-
-            review = _get_review(review_run_id)
-            if review:
-                files = review.get("files", [])
-                stems = [Path(f["filename"]).stem for f in files] if files                         else ([Path(review["filename"]).stem] if review.get("filename") else [])
-                for stem in stems:
-                    cached = load_ocr_cache(stem)
-                    if cached:
-                        _ocr_store[review_run_id] = cached
+    
+            for f in files:
+                stem = Path(f["filename"]).stem
+                cached = load_ocr_cache(stem)
+                if cached:
+                    if review_run_id not in _ocr_store:
+                        _ocr_store[review_run_id] = {}
+                    _ocr_store[review_run_id][f["document_id"]] = cached
+    
+                    if f["document_id"] == target_document_id:
                         ocr = cached
+                        print(f"[OCR] MinIO에서 복원: {stem}")
                         break
         except Exception as e:
             print(f"[OCR] MinIO 복원 실패: {e}")
-
     if not ocr:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="OCR 결과가 없습니다.")

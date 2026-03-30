@@ -16,7 +16,8 @@ import threading
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException, Query, status
+from fastapi import APIRouter, Body, HTTPException, Query, Response, status, HTTPException
+from urllib.parse import quote
 
 from app.schemas.common import BaseResponse, BBox, PaginationMeta
 from app.schemas.enums import (
@@ -84,93 +85,31 @@ def _next_run_id() -> int:
             _review_counter += 1
             return _review_counter
 
+def _get_review_in_project(run_id: int, project_id: int | None = None) -> dict | None:
+    review = _get_review(run_id)
+    if not review:
+        return None
+    if project_id is not None:
+        review_project_id = review.get("project_id")
+        if review_project_id is not None and review_project_id != project_id:
+            return None
+    return review
+
+def _save_review_data(run_id: int, data: dict[str, Any]) -> None:
+    with _store_lock:
+        _review_store[run_id] = data
+
+    try:
+        from app.services.storage.redis_store import save_review
+
+        save_review(run_id, dict(data))
+    except Exception as e:
+        print(f"[Redis] 저장 실패 (인메모리 유지): {e}")
 
 # ──────────────────────────────────────────────
 # 엔드포인트
 # ──────────────────────────────────────────────
 
-@router.post(
-    "",
-    response_model=BaseResponse[ReviewCreateResponse],
-    status_code=status.HTTP_201_CREATED,
-    summary="검토 실행",
-    description="""
-OCR 결과 JSON을 body에 포함하거나, document_ids만 넘기면 목업 텍스트로 실행합니다.
-
-**OCR JSON 포맷 (body.ocr_data):**
-```json
-{
-  "document_id": 1001,
-  "pages": [
-    {
-      "page_no": 1,
-      "blocks": [
-        { "block_id": 1, "text": "용역 계획서", "bbox": [100,100,320,145] }
-      ]
-    }
-  ]
-}
-```
-ocr_data 없이 호출하면 샘플 텍스트로 룰 엔진을 실행합니다.
-""",
-)
-async def create_review(
-    project_id: int,
-    body: ReviewCreateRequest,
-    ocr_data: dict | None = Body(None, embed=True, description="OCR 파싱 결과 JSON"),
-) -> BaseResponse[ReviewCreateResponse]:
-    run_id = _next_run_id()
-    doc_id = body.document_ids[0] if body.document_ids else 1001
-
-    # ── full_text 추출
-    filename = ""
-    if ocr_data:
-        from app.services.review.ocr_adapter import adapt
-        filename    = ocr_data.get("filename", "") if isinstance(ocr_data, dict) else ""
-        adapted_doc = adapt(ocr_data if isinstance(ocr_data, list) else ocr_data, doc_id)
-        full_text   = "\n".join(b.text for b in adapted_doc.blocks)
-    else:
-        sample    = _make_sample_document(doc_id)
-        full_text = "\n".join(b.text for b in sample.blocks)
-
-    # ── 문서 타입 자동 감지
-    from app.services.review.doc_type_dispatcher import detect_doc_type
-    doc_type = detect_doc_type(full_text, filename)
-
-    # ── 하이브리드 실행 (룰 엔진 + vLLM) — await 직접 호출 (uvloop 호환)
-    use_llm = body.options.run_consistency_check
-    from app.services.review.vllm_reviewer import run_hybrid_review
-    issues_serialized = await run_hybrid_review(
-        full_text=full_text,
-        document_id=doc_id,
-        review_run_id=run_id,
-        use_llm=use_llm,
-        doc_type=doc_type,
-    )
-
-    data = {
-        "status":      ReviewStatus.completed,
-        "document_id": doc_id,
-        "issues":      issues_serialized,
-        "started_at":  datetime.now().isoformat(),
-        "finished_at": datetime.now().isoformat(),
-    }
-    with _store_lock:
-        _review_store[run_id] = data
-    try:
-        from app.services.storage.redis_store import save_review
-        save_review(run_id, dict(data))
-    except Exception as e:
-        print(f"[Redis] 저장 실패 (인메모리 유지): {e}")
-
-    return BaseResponse(
-        data=ReviewCreateResponse(
-            review_run_id=run_id,
-            project_id=project_id,
-            status=ReviewStatus.completed,
-            created_at=datetime.now(),
-        )
-    )
 
 
 @router.get(
@@ -178,8 +117,11 @@ async def create_review(
     response_model=BaseResponse[ReviewStatusResponse],
     summary="검토 상태 조회",
 )
-async def get_review_status(review_run_id: int) -> BaseResponse[ReviewStatusResponse]:
-    store = _get_review(review_run_id)
+async def get_review_status(
+    review_run_id: int,
+    project_id: int | None = Query(None),
+) -> BaseResponse[ReviewStatusResponse]:
+    store = _get_review_in_project(review_run_id, project_id)
     return BaseResponse(
         data=ReviewStatusResponse(
             review_run_id=review_run_id,
@@ -197,8 +139,11 @@ async def get_review_status(review_run_id: int) -> BaseResponse[ReviewStatusResp
     response_model=BaseResponse[ReviewSummaryResponse],
     summary="검토 요약",
 )
-async def get_review_summary(review_run_id: int) -> BaseResponse[ReviewSummaryResponse]:
-    store = _get_review(review_run_id)
+async def get_review_summary(
+    review_run_id: int,
+    project_id: int | None = Query(None),
+) -> BaseResponse[ReviewSummaryResponse]:
+    store = _get_review_in_project(review_run_id, project_id)
     issues = store["issues"] if store else []
 
     counts = {"high": 0, "critical": 0, "warning": 0, "info": 0}
@@ -245,6 +190,7 @@ async def get_review_summary(review_run_id: int) -> BaseResponse[ReviewSummaryRe
 )
 async def get_review_issues(
     review_run_id: int,
+    project_id: int | None = Query(None),
     severity: SeverityLevel | None = Query(None),
     category: IssueCategory | None = Query(None),
     document_id: int | None = Query(None),
@@ -252,7 +198,7 @@ async def get_review_issues(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ) -> BaseResponse[ReviewIssueListResponse]:
-    store = _get_review(review_run_id)
+    store = _get_review_in_project(review_run_id, project_id)
     all_issues = store["issues"] if store else []
 
     # 필터
@@ -301,8 +247,9 @@ async def get_review_issues(
 async def get_review_issue_detail(
     review_run_id: int,
     issue_id: int,
+    project_id: int | None = Query(None),
 ) -> BaseResponse[ReviewIssueDetailResponse]:
-    store = _get_review(review_run_id)
+    store = _get_review_in_project(review_run_id, project_id)
     if not store:
         raise HTTPException(status_code=404, detail="검토 결과를 찾을 수 없습니다.")
 
@@ -355,8 +302,8 @@ async def get_review_issue_detail(
     response_model=BaseResponse[ApprovalLineResponse],
     summary="결재선 안내",
 )
-async def get_approval_line(review_run_id: int) -> BaseResponse[ApprovalLineResponse]:
-    store = _get_review(review_run_id)
+async def get_approval_line(review_run_id: int, project_id: int | None = None) -> BaseResponse[ApprovalLineResponse]:
+    store = _get_review_in_project(review_run_id, project_id)
     issues = store["issues"] if store else []
 
     # R030 (고액 결재선) 이슈 여부로 결재선 결정
@@ -386,26 +333,86 @@ async def get_approval_line(review_run_id: int) -> BaseResponse[ApprovalLineResp
     response_model=BaseResponse[ReviewRunDocumentsResponse],
     summary="검토 대상 문서 목록",
 )
-async def get_review_documents(review_run_id: int) -> BaseResponse[ReviewRunDocumentsResponse]:
-    store = _get_review(review_run_id)
-    doc_id = store["document_id"] if store else 1001
+async def get_review_documents(
+    review_run_id: int,
+    project_id: int | None = Query(None),
+) -> BaseResponse[ReviewRunDocumentsResponse]:
+    store = _get_review_in_project(review_run_id, project_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="검토 결과를 찾을 수 없습니다.")
+
+    files = store.get("files", [])
+    items = [
+        ReviewRunDocumentResponse(
+            document_id=f["document_id"],
+            original_filename=f["filename"],
+            role_in_review=f.get("doc_type", "unknown"),
+            doc_type_confirmed=DocumentType.unknown,
+            parse_status=ParseStatus.done,
+        )
+        for f in files
+    ]
 
     return BaseResponse(
         data=ReviewRunDocumentsResponse(
             review_run_id=review_run_id,
-            items=[
-                ReviewRunDocumentResponse(
-                    document_id=doc_id,
-                    original_filename="입찰공고문.pdf",
-                    role_in_review="bid_notice",
-                    doc_type_confirmed=DocumentType.bid_document,
-                    parse_status=ParseStatus.done,
-                )
-            ],
+            items=items,
         )
     )
+    
+@router.get(
+    "/reviews/{review_run_id}/pdf/{document_id}",
+    summary="검토 문서 PDF 원본 반환",
+    response_class=Response,
+)
+async def get_review_pdf(
+    review_run_id: int,
+    document_id: int,
+    project_id: int | None = Query(None),
+) -> Response:
+    store = _get_review_in_project(review_run_id, project_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="검토 결과를 찾을 수 없습니다.")
 
+    files = store.get("files", [])
+    target = next((f for f in files if f.get("document_id") == document_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
 
+    filename = target.get("filename")
+    if not filename:
+        raise HTTPException(status_code=404, detail="문서 파일명이 없습니다.")
+
+    # 1순위: MinIO에서 PDF 원본 로드
+    try:
+        from app.services.storage.minio_client import load_pdf
+
+        pdf_bytes = load_pdf(filename)
+        if pdf_bytes:
+            encoded_filename = quote(filename)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                
+            )
+    except Exception as e:
+        print(f"[PDF] MinIO 로드 실패: {e}")
+
+    # 2순위: 로컬 저장 경로 fallback
+    try:
+        from pathlib import Path
+
+        local_path = Path("/data/clms_seocho") / filename
+        if local_path.exists():
+            return Response(
+                content=local_path.read_bytes(),
+                media_type="application/pdf",
+                
+            )
+    except Exception as e:
+        print(f"[PDF] 로컬 파일 로드 실패: {e}")
+
+    raise HTTPException(status_code=404, detail="PDF 원본을 찾을 수 없습니다.")
 # ──────────────────────────────────────────────
 # 샘플 문서 (OCR 없을 때 데모용)
 # ──────────────────────────────────────────────

@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import AsyncGenerator
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -39,46 +39,66 @@ def _get_or_create(project_id: int) -> dict:
                 "context":       "",
                 "history":       [],
                 "review_run_id": None,
+                "document_id": None,
             }
         return _chat_store[project_id]
 
 
 def _load_context_from_review(
+    project_id: int,
     review_run_id: int,
     document_id: int | None = None,
 ) -> str:
-    """
-    _review_store에서 문서 텍스트 로드.
-    document_id 있으면 해당 문서만, 없으면 전체 합산.
-    """
     try:
-        from app.api.reviews import _review_store
-        review = _review_store.get(review_run_id)
+        from app.api.reviews import _get_review_in_project, _review_store, _store_lock
+
+        review = _get_review_in_project(review_run_id, project_id)
+
+        # 인메모리에 없으면 Redis에서 복원
         if not review:
+            try:
+                from app.services.storage.redis_store import load_review
+                loaded = load_review(review_run_id)
+                if loaded:
+                    with _store_lock:
+                        _review_store[review_run_id] = loaded
+                    review = loaded
+                    print(f"[Chat] Redis 복원 성공: run_id={review_run_id}")
+            except Exception as e:
+                print(f"[Chat] Redis 복원 실패: {e}")
+
+        if not review:
+            print(f"[Chat] review 없음: run_id={review_run_id}, project_id={project_id}")
             return ""
 
-        # document_id로 특정 문서만 가져오기
-        if document_id:
-            files = review.get("files", [])
-            for f in files:
-                if f.get("document_id") == document_id:
-                    return f.get("full_text", "")
-            # files에 없으면 단일 문서 검토였을 경우
-            return review.get("full_text", "")
-
-        # document_id 없으면 전체 합산
         files = review.get("files", [])
+        print(f"[Chat] files 수: {len(files)}, document_id 요청: {document_id}")
+
+        if document_id is not None:
+            for f in files:
+                # 타입 안전 비교
+                if int(f.get("document_id", -1)) == int(document_id):
+                    text = f.get("full_text", "")
+                    print(f"[Chat] 문서 매칭: {f.get('filename')}, text 길이: {len(text)}")
+                    if text:
+                        return text
+            print(f"[Chat] document_id={document_id} 매칭 실패, 전체 텍스트 fallback")
+
         if files:
-            return "\n\n".join(
-                f"=== {f['filename']} ===\n{f.get('full_text', '')}"
+            combined = "\n\n".join(
+                f"=== {f.get('filename', '')} ===\n{f.get('full_text', '')}"
                 for f in files
+                if f.get("full_text")  # 빈 텍스트 제외
             )
+            if combined:
+                return combined
+
+        # files에 full_text 없으면 review 레벨 full_text
         return review.get("full_text", "")
 
-    except Exception:
+    except Exception as e:
+        print(f"[Chat] 컨텍스트 로드 오류: {e}")
         return ""
-
-
 # ──────────────────────────────────────────────
 # 스키마
 # ──────────────────────────────────────────────
@@ -166,6 +186,7 @@ async def chat_stream(
         store["history"]       = []
         store["context"]       = ""
         store["review_run_id"] = None
+        store["document_id"] = None
 
     # 컨텍스트 로드 우선순위:
     # 1) review_run_id로 _review_store에서 자동 로드
@@ -173,15 +194,17 @@ async def chat_stream(
     # 3) 기존 세션 컨텍스트 유지
     # 문서/검토가 바뀌면 컨텍스트 + 히스토리 갱신
     new_review  = body.review_run_id and body.review_run_id != store.get("review_run_id")
-    new_doc     = body.document_id   and body.document_id   != store.get("document_id")
+    new_doc = body.document_id is not None and body.document_id != store.get("document_id")
 
     if body.review_run_id and (new_review or new_doc):
-        context = _load_context_from_review(body.review_run_id, body.document_id)
-        if context:
-            store["context"]       = context
-            store["review_run_id"] = body.review_run_id
-            store["document_id"]   = body.document_id
-            store["history"]       = []   # 문서 바뀌면 히스토리 초기화
+        context = _load_context_from_review(project_id, body.review_run_id, body.document_id)
+        if not context:
+            print(f"[Chat] 컨텍스트 없음 — 빈 컨텍스트로 진행 (run_id={body.review_run_id})")
+            context = ""
+        store["context"]       = context
+        store["review_run_id"] = body.review_run_id
+        store["document_id"]   = body.document_id
+        store["history"]       = []   # 문서 바뀌면 히스토리 초기화
     elif body.document_context:
         store["context"]    = body.document_context
         store["document_id"] = body.document_id
@@ -199,8 +222,8 @@ async def chat_stream(
                     json={
                         "model":       VLLM_MODEL,
                         "messages":    messages,
-                        "max_tokens":  1500,
-                        "temperature": 0.2,
+                        "max_tokens":  4096,
+                        "temperature": 0.1,
                         "stream":      True,
                     },
                 ) as resp:
@@ -261,6 +284,9 @@ async def clear_chat_history(project_id: int):
     with _store_lock:
         if project_id in _chat_store:
             _chat_store[project_id] = {
-                "context": "", "history": [], "review_run_id": None
+                "context": "",
+                "history": [],
+                "review_run_id": None,
+                "document_id": None,
             }
     return {"success": True}

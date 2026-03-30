@@ -106,6 +106,9 @@ async def create_project(body: ProjectCreateRequest) -> BaseResponse[ProjectResp
         "created_by":  1,
         "created_at":  now,
         "updated_at":  now,
+        "document_count": 0,
+        "latest_review_id": None,
+        "latest_review_status": None,
     }
     _save_project(pid, data)
     return BaseResponse(data=ProjectResponse(**{**data, "created_at": datetime.fromisoformat(now), "updated_at": datetime.fromisoformat(now)}))
@@ -123,6 +126,17 @@ async def list_projects(
     keyword: str | None = Query(None),
 ) -> BaseResponse[ProjectListResponse]:
     all_projects = _list_all_projects()
+    try:
+        from app.api.documents import _document_store
+
+        for p in all_projects:
+            pid = p.get("id")
+            p["document_count"] = sum(
+                1 for meta in _document_store.values()
+                if meta.get("project_id") == pid
+            )
+    except Exception:
+        pass
 
     if status_filter:
         all_projects = [p for p in all_projects if p.get("status") == status_filter]
@@ -162,7 +176,14 @@ async def get_project(project_id: int) -> BaseResponse[ProjectDetailResponse]:
     p = _get_project(project_id)
     if not p:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
-
+    try:
+        from app.api.documents import _document_store
+        p["document_count"] = sum(
+            1 for meta in _document_store.values()
+            if meta.get("project_id") == project_id
+        )
+    except Exception:
+        pass
     return BaseResponse(data=ProjectDetailResponse(
         id=p["id"],
         name=p["name"],
@@ -188,9 +209,12 @@ async def update_project(project_id: int, body: ProjectUpdateRequest) -> BaseRes
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
 
     now = datetime.now().isoformat()
-    if body.name:        p["name"]        = body.name
-    if body.description: p["description"] = body.description
-    if body.status:      p["status"]      = body.status
+    if body.name is not None:
+        p["name"] = body.name
+    if body.description is not None:
+        p["description"] = body.description
+    if body.status is not None:
+        p["status"] = body.status
     p["updated_at"] = now
 
     _save_project(project_id, p)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 
-from fastapi import APIRouter, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 
 from app.schemas.common import BBox, BaseResponse, DeleteResponse, PaginationMeta
 from app.schemas.document import (
@@ -54,6 +54,8 @@ def _get_doc_type(doc_type_str: str) -> DocumentType:
         "bid_notice":       DocumentType.bid_document,
         "proposal_request": DocumentType.proposal,
         "plan":             DocumentType.plan,
+        "contract":         DocumentType.contract,
+        "unknown":          DocumentType.unknown,
     }.get(doc_type_str, DocumentType.unknown)
 
 
@@ -111,8 +113,9 @@ async def list_project_documents(
 
     # review_run_id 있으면 해당 검토의 파일 목록
     if review_run_id:
-        from app.api.reviews import _get_review
-        review = _get_review(review_run_id)
+        from app.api.reviews import _get_review_in_project
+
+        review = _get_review_in_project(review_run_id, project_id)
         if review:
             for f in review.get("files", []):
                 items.append(DocumentListItemResponse(
@@ -127,8 +130,10 @@ async def list_project_documents(
                     uploaded_at=datetime.now(),
                 ))
     else:
-        # _document_store에서 가져오기
         for doc_id, meta in _document_store.items():
+            if meta.get("project_id") != project_id:
+                continue
+
             items.append(DocumentListItemResponse(
                 id=doc_id,
                 original_filename=meta.get("filename", ""),
@@ -138,7 +143,9 @@ async def list_project_documents(
                 doc_type_confirmed=_get_doc_type(meta.get("doc_type", "")),
                 parse_status=ParseStatus.done,
                 uploaded_by=1,
-                uploaded_at=datetime.fromisoformat(meta.get("uploaded_at", datetime.now().isoformat())),
+                uploaded_at=datetime.fromisoformat(
+                    meta.get("uploaded_at", datetime.now().isoformat())
+                ),
             ))
 
     total = len(items)
@@ -175,6 +182,8 @@ async def get_document(project_id: int, document_id: int) -> BaseResponse[Docume
                     raw = get_client().get(k)
                     if raw:
                         review = json.loads(raw)
+                        if review.get("project_id") not in (None, project_id):
+                            continue
                         for f in review.get("files", []):
                             if f.get("document_id") == document_id:
                                 meta = f
@@ -186,7 +195,8 @@ async def get_document(project_id: int, document_id: int) -> BaseResponse[Docume
 
     if not meta:
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
-
+    if meta and meta.get("project_id") not in (None, project_id):
+        raise HTTPException(status_code=404, detail="해당 프로젝트의 문서가 아닙니다.")
     filename = meta.get("filename", "")
     return BaseResponse(data=DocumentDetailResponse(
         id=document_id,

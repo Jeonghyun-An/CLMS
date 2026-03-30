@@ -1,11 +1,3 @@
-"""
-리포트 API — 실제 데이터 기반
-────────────────────────────────────────────────────────────
-GET /projects/{id}/reviews/{run_id}/report/download  PDF 다운로드
-GET /projects/{id}/reviews/{run_id}/report           리포트 메타
-GET /projects/{id}/reviews/{run_id}/checklist        체크리스트
-GET /projects/{id}/reviews/{run_id}/highlights/{doc_id}  하이라이트 좌표
-"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -31,7 +23,18 @@ SEV_COLOR = {
     "warning":  "yellow",
     "info":     "blue",
 }
+def _get_review_for_project(review_run_id: int, project_id: int) -> dict:
+    from app.api.reviews import _get_review
 
+    review = _get_review(review_run_id)
+    if not review:
+        raise HTTPException(status_code=404, detail="검토 결과를 찾을 수 없습니다.")
+
+    review_project_id = review.get("project_id")
+    if review_project_id is not None and review_project_id != project_id:
+        raise HTTPException(status_code=404, detail="해당 프로젝트의 검토 결과가 아닙니다.")
+
+    return review
 
 # ──────────────────────────────────────────────
 # PDF 리포트 다운로드 (실제 생성)
@@ -43,8 +46,7 @@ SEV_COLOR = {
     response_class=Response,
 )
 async def download_report_pdf(review_run_id: int, project_id: int) -> Response:
-    from app.api.reviews import _get_review
-    review = _get_review(review_run_id)
+    review = _get_review_for_project(review_run_id, project_id)
     if not review:
         raise HTTPException(status_code=404, detail="검토 결과를 찾을 수 없습니다.")
 
@@ -89,12 +91,13 @@ async def download_report_pdf(review_run_id: int, project_id: int) -> Response:
     summary="리포트 정보",
 )
 async def get_review_report(review_run_id: int, project_id: int):
+    _get_review_for_project(review_run_id, project_id)
     return BaseResponse(data=ReportFileResponse(
         report_id=review_run_id,
         review_run_id=review_run_id,
         report_type="pdf",
         file_path=f"/data/reports/review_{review_run_id}.pdf",
-        download_url=f"/api/v1/projects/{project_id}/reviews/{review_run_id}/report/download",
+        download_url=f"/api/v1/reports/reviews/{review_run_id}/report/download?project_id={project_id}",
         created_at=datetime.now(),
     ))
 
@@ -109,8 +112,7 @@ async def get_review_report(review_run_id: int, project_id: int):
     summary="체크리스트 결과",
 )
 async def get_review_checklist(review_run_id: int, project_id: int):
-    from app.api.reviews import _get_review
-    review = _get_review(review_run_id)
+    review = _get_review_for_project(review_run_id, project_id)
     issues = review["issues"] if review else []
     rule_ids = {i.get("rule_id") for i in issues}
 
@@ -164,11 +166,10 @@ page_no: 1-based 페이지 번호
 )
 async def get_review_highlights(
     review_run_id: int,
-    document_id:   int,
-    project_id:    int,
+    document_id: int,
+    project_id: int,
 ) -> BaseResponse[HighlightResponse]:
-    from app.api.reviews import _get_review
-    review = _get_review(review_run_id)
+    review = _get_review_for_project(review_run_id, project_id)
     issues = review["issues"] if review else []
 
     items = []
@@ -230,6 +231,7 @@ async def get_review_highlights(
     deprecated=True,
 )
 async def get_review_highlight_file(review_run_id: int, document_id: int, project_id: int):
+    _get_review_for_project(review_run_id, project_id)
     return BaseResponse(data=HighlightFileResponse(
         review_run_id=review_run_id,
         document_id=document_id,

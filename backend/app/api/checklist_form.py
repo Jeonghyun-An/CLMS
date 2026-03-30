@@ -17,7 +17,7 @@ import threading
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.schemas.common import BaseResponse
@@ -197,6 +197,13 @@ async def save_checklist(
     project_id: int,
     body: ChecklistSaveRequest,
 ):
+    if body.review_run_id is not None:
+        from app.api.reviews import _get_review_in_project
+
+        review = _get_review_in_project(body.review_run_id, project_id)
+        if not review:
+            raise HTTPException(status_code=404, detail="해당 프로젝트의 검토 결과가 없습니다.")
+
     with _store_lock:
         _checklist_store[project_id] = {
             "review_run_id": body.review_run_id,
@@ -205,7 +212,6 @@ async def save_checklist(
         }
 
     return BaseResponse(data={"saved": True, "project_id": project_id})
-
 
 @router.get(
     "/result",
@@ -222,14 +228,22 @@ async def get_checklist_result(
 
     # AI 판단 계약 유형 (review_store에서 가져오기)
     ai_detected = None
-    if review_run_id:
-        from app.api.reviews import _review_store
-        review = _review_store.get(review_run_id)
-        if review:
-            doc_type = review.get("doc_type", "unknown")
-            ai_detected = _detect_contract_type_from_issues(
-                review.get("issues", []), doc_type
-            )
+    target_review_run_id = review_run_id or store.get("review_run_id")
+
+    if target_review_run_id:
+        from app.api.reviews import _get_review_in_project
+
+        review = _get_review_in_project(target_review_run_id, project_id)
+        if not review:
+            raise HTTPException(status_code=404, detail="해당 프로젝트의 검토 결과가 없습니다.")
+
+        files = review.get("files", [])
+        doc_type = files[0].get("doc_type", "unknown") if files else review.get("doc_type", "unknown")
+
+        ai_detected = _detect_contract_type_from_issues(
+            review.get("issues", []),
+            doc_type,
+        )
 
     # 경고 생성 (사용자 선택 vs AI 판단 비교)
     warnings = _generate_warnings(selections, ai_detected)
@@ -237,7 +251,7 @@ async def get_checklist_result(
     return BaseResponse(
         data=ChecklistResultResponse(
             project_id=project_id,
-            review_run_id=review_run_id or store.get("review_run_id"),
+            review_run_id=target_review_run_id,
             selections=selections,
             warnings=warnings,
             ai_detected=ai_detected,

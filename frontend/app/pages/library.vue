@@ -176,7 +176,7 @@
               class="library_item"
               :class="`ty_0${(i % 5) + 1}`"
             >
-              <a :href="`/main`" class="library_item_inn">
+              <NuxtLink :href="`/main`" class="library_item_inn">
                 <div class="item_menu_wrap">
                   <img :src="`/img/icon/ic_note_0${(i % 5) + 1}.svg`" alt="" />
                 </div>
@@ -196,7 +196,7 @@
                     <div class="member">3+</div>
                   </div>
                 </div>
-              </a>
+              </NuxtLink>
               <a href="#;" class="item_menu" aria-label="메뉴"></a>
             </div>
           </div>
@@ -227,13 +227,16 @@
               <tbody>
                 <tr v-for="(item, i) in filteredProjects" :key="item.id">
                   <td>
-                    <a :href="`/main`" class="ellipsis tit">
+                    <NuxtLink
+                      :href="`/main?project_id=${item.id}`"
+                      class="ellipsis tit"
+                    >
                       <img
                         :src="`/img/icon/ic_note_0${(i % 5) + 1}.svg`"
                         alt=""
                       />
                       {{ item.name }}
-                    </a>
+                    </NuxtLink>
                   </td>
                   <td>소스 {{ item.document_count }}개</td>
                   <td>{{ formatDate(item.created_at) }}</td>

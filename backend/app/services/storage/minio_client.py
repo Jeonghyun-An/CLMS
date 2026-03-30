@@ -59,6 +59,31 @@ def upload_pdf(pdf_bytes: bytes, filename: str) -> str | None:
         print(f"[MinIO] PDF 저장 실패: {e}")
         return None
 
+def load_pdf(filename: str) -> bytes | None:
+    """
+    MinIO에 저장된 PDF 원본 로드.
+    키: pdfs/{filename}
+    반환: PDF bytes 또는 None
+    """
+    try:
+        client = _get_client()
+        object_name = f"pdfs/{filename}"
+        response = client.get_object(MINIO_BUCKET, object_name)
+        try:
+            data = response.read()
+            print(f"[MinIO] PDF 로드 성공: {object_name}")
+            return data
+        finally:
+            response.close()
+            response.release_conn()
+    except S3Error as e:
+        if e.code == "NoSuchKey":
+            return None
+        print(f"[MinIO] PDF 로드 실패: {e}")
+        return None
+    except Exception as e:
+        print(f"[MinIO] PDF 로드 오류: {e}")
+        return None
 
 # ──────────────────────────────────────────────
 # OCR 캐시 저장 / 조회

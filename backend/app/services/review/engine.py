@@ -110,20 +110,14 @@ def _extract_amount(text: str) -> int | None:
             pass
     return None
 
-
-# ──────────────────────────────────────────────
-# 체크 타입별 핸들러
-# ──────────────────────────────────────────────
-
 def _check_keyword_missing(
     rule: dict, doc: ParsedDocument
 ) -> ReviewIssue | None:
     keywords: list[str] = rule["params"]["keywords"]
     matched = _find_blocks_with_keywords(doc.blocks, keywords)
     if matched:
-        return None  # 키워드 존재 → 문제 없음
+        return None
 
-    # 키워드가 하나도 없으면 이슈
     return ReviewIssue(
         rule_id=rule["id"],
         category=rule["category"],
@@ -133,9 +127,8 @@ def _check_keyword_missing(
         recommendation=rule["recommendation"],
         law_ref=rule["law_ref"],
         evidence_blocks=[],
-        highlights=[],
+        highlights=[],   # 키워드 자체가 없으므로 위치 불명 — 빈 배열이 맞음
     )
-
 
 def _check_regex_match(
     rule: dict, doc: ParsedDocument
@@ -285,7 +278,15 @@ def issues_to_api_response(
                     "quoted_text": issue.law_ref,
                 }
             ] if issue.law_ref else [],
-            "evidences": issue.evidence_blocks,
+            "evidences": [
+                {
+                    "block_id":    ev.get("block_id"),
+                    "page_no":     ev.get("page_no", 1),
+                    "quoted_text": ev.get("quoted_text", ""),
+                    "bbox":        ev.get("bbox", []),   # ← 이게 없으면 reports.py fallback도 못 씀
+                }
+                for ev in issue.evidence_blocks
+            ],
             "highlights": issue.highlights,
             "status": "open",
             "created_at": datetime.now().isoformat(),
@@ -294,7 +295,6 @@ def issues_to_api_response(
 
 
 def _check_order_check(rule: dict, doc: ParsedDocument) -> ReviewIssue | None:
-    """문서 내 두 키워드의 등장 순서가 잘못된 경우 이슈 반환"""
     full = "\n".join(b.text for b in doc.blocks)
     first_kw  = rule["params"]["first_keyword"]
     second_kw = rule["params"]["second_keyword"]
@@ -303,24 +303,31 @@ def _check_order_check(rule: dict, doc: ParsedDocument) -> ReviewIssue | None:
     if pos1 == -1 or pos2 == -1:
         return None
     if pos1 >= pos2:
-        return None  # 순서 정상
+        return None
 
-    evidence = [
-        {"block_id": b.block_id, "page_no": b.page_no, "quoted_text": b.text[:80]}
-        for b in doc.blocks
+    matched = [
+        b for b in doc.blocks
         if first_kw in b.text or second_kw in b.text
+    ]
+    evidence = [
+        {"block_id": b.block_id, "page_no": b.page_no,
+         "quoted_text": b.text[:80], "bbox": b.bbox}   # ← bbox 추가
+        for b in matched
+    ]
+    highlights = [
+        {"page_no": b.page_no, "bbox": b.bbox, "block_id": b.block_id}  # ← 실제 bbox
+        for b in matched[:2]
     ]
     return ReviewIssue(
         rule_id=rule["id"], category=rule["category"], severity=rule["severity"],
         title=rule["title"], description=rule["description"],
         recommendation=rule["recommendation"], law_ref=rule["law_ref"],
         evidence_blocks=evidence[:2],
-        highlights=[{"page_no": e["page_no"], "bbox": [0,0,0,0], "block_id": e["block_id"]} for e in evidence[:1]],
+        highlights=highlights,
     )
 
 
 def _check_amount_mismatch(rule: dict, doc: ParsedDocument) -> ReviewIssue | None:
-    """두 패턴이 동시에 존재할 때 금액 불일치 이슈 반환"""
     full = "\n".join(b.text for b in doc.blocks)
     p1   = rule["params"]["pattern_text_amount"]
     p2   = rule["params"]["pattern_table_amount"]
@@ -332,20 +339,27 @@ def _check_amount_mismatch(rule: dict, doc: ParsedDocument) -> ReviewIssue | Non
     if cond == "both_found" and not (found1 and found2):
         return None
 
-    evidence = [
-        {"block_id": b.block_id, "page_no": b.page_no, "quoted_text": b.text[:80]}
-        for b in doc.blocks
+    matched = [
+        b for b in doc.blocks
         if re.search(p1, b.text) or re.search(p2, b.text)
+    ]
+    evidence = [
+        {"block_id": b.block_id, "page_no": b.page_no,
+         "quoted_text": b.text[:80], "bbox": b.bbox}   # ← bbox 추가
+        for b in matched
+    ]
+    highlights = [
+        {"page_no": b.page_no, "bbox": b.bbox, "block_id": b.block_id}  # ← 실제 bbox
+        for b in matched[:2]
     ]
     return ReviewIssue(
         rule_id=rule["id"], category=rule["category"], severity=rule["severity"],
         title=rule["title"], description=rule["description"],
         recommendation=rule["recommendation"], law_ref=rule["law_ref"],
         evidence_blocks=evidence[:3],
-        highlights=[{"page_no": e["page_no"], "bbox": [0,0,0,0], "block_id": e["block_id"]} for e in evidence[:2]],
+        highlights=highlights,
     )
 
 
-# 핸들러 맵에 등록
 HANDLER_MAP["order_check"]     = _check_order_check
 HANDLER_MAP["amount_mismatch"] = _check_amount_mismatch

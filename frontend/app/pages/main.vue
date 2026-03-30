@@ -115,7 +115,9 @@
                   <a href="#;" class="name_wrap">
                     <div class="img_wrap">
                       <img
-                        :src="`/img/layout/img_profile_0${(i % 3) + 1}.svg`"
+                        :src="
+                          '/img/layout/img_profile_0' + ((i % 3) + 1) + '.svg'
+                        "
                         alt=""
                       />
                     </div>
@@ -271,11 +273,7 @@
           </div>
           <div class="source_list_wrap">
             <div class="source_list">
-              <div
-                v-if="!selectedFiles.length"
-                class="empty_wrap"
-                style="padding: 20px; text-align: center"
-              >
+              <div v-if="!categorizedFiles.length" class="empty_wrap">
                 <div class="ic_wrap">
                   <img src="/img/icon/ic_empty_source.svg" alt="" />
                 </div>
@@ -283,46 +281,65 @@
                   저장된 소스가 여기에 표시됩니다.<br />(pdf, hwpx, xlsx 가능)
                 </div>
               </div>
-              <div v-else class="accordion">
+              <template v-else>
+                <div class="list_num">
+                  총 문서 개수
+                  <span class="num">{{ allSelectedFiles.length }}</span>
+                </div>
                 <div
-                  v-for="(f, i) in selectedFiles"
-                  :key="i"
-                  class="accordion_panel_item on"
+                  class="accordion"
+                  :key="accordionRenderKey"
+                  ref="accordionRef"
                 >
                   <div
-                    class="panel_item_tit_wrap"
-                    style="
-                      display: flex;
-                      align-items: center;
-                      gap: 8px;
-                      padding: 8px 12px;
-                    "
+                    v-for="(group, gi) in categorizedFiles"
+                    :key="group.doc_type"
+                    class="accordion_item"
+                    :class="{ open: group.open }"
+                    :data-doc-type="group.doc_type"
                   >
-                    <img
-                      src="/img/icon/ic_doc.svg"
-                      alt=""
-                      style="width: 16px"
-                    />
-                    <span class="ellipsis" style="flex: 1; font-size: 13px">{{
-                      f.name
-                    }}</span>
-                    <a href="#;" class="ic_del" @click.prevent="removeFile(i)">
-                      <img
-                        src="/img/icon/ic_close.svg"
-                        alt=""
-                        style="width: 12px"
-                      />
-                    </a>
+                    <button
+                      type="button"
+                      class="accordion_btn"
+                      :aria-expanded="group.open"
+                      @click="group.open = !group.open"
+                    >
+                      <span class="ellipsis">{{ group.label }}</span>
+                    </button>
+                    <div
+                      class="accordion_panel"
+                      :hidden="!group.open"
+                      :data-group-idx="gi"
+                    >
+                      <div
+                        v-for="(f, fi) in group.files"
+                        :key="f.name"
+                        class="accordion_panel_item"
+                      >
+                        <a href="#;" class="panel_item_tit_wrap" @click.prevent>
+                          <div class="img_wrap">
+                            <img :src="fileIcon(f.name)" alt="" />
+                          </div>
+                          <div class="tit ellipsis">{{ f.name }}</div>
+                        </a>
+                        <a
+                          href="#;"
+                          class="ic_del"
+                          aria-label="항목 제거"
+                          @click.prevent="removeFile(gi, fi)"
+                        ></a>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </template>
             </div>
           </div>
           <div class="panel_btm">
             <button
               type="button"
               class="btn sz_md sq btn_ty05 btn_full"
-              :disabled="!selectedFiles.length || isLoading"
+              :disabled="!allSelectedFiles.length || isLoading"
               @click="startReview"
             >
               검토 시작
@@ -347,19 +364,24 @@
           </div>
           <div
             class="upload_wrap"
-            :class="{ is_upload: selectedFiles.length, dragover: isDragging }"
+            :class="{
+              is_upload: allSelectedFiles.length,
+              dragover: isDragging,
+            }"
             @dragenter.prevent="isDragging = true"
             @dragover.prevent="isDragging = true"
             @dragleave.prevent="isDragging = false"
             @drop.prevent="onDrop"
           >
             <div class="upload_tit_wrap">
-              <template v-if="!selectedFiles.length">
+              <template v-if="!allSelectedFiles.length">
                 <p class="upload_tit">또는 파일 드롭</p>
                 <p class="upload_desc">PDF, hwpx, xlsx 등</p>
               </template>
               <ul v-else class="upload_file_list">
-                <li v-for="(f, i) in selectedFiles" :key="i">{{ f.name }}</li>
+                <li v-for="f in allSelectedFiles" :key="f.name">
+                  {{ f.name }}
+                </li>
               </ul>
             </div>
             <input
@@ -454,19 +476,87 @@
 </template>
 
 <script setup lang="ts">
+import Sortable from "sortablejs";
+
 const router = useRouter();
-const { uploadStream } = useApi();
+const route = useRoute();
+const { uploadStream, projectId } = useApi();
 
 const projectTitle = ref("AI 계약서류 검토");
 const isEditTitle = ref(false);
 const leftOpen = ref(true);
 const rightOpen = ref(true);
-const selectedFiles = ref<File[]>([]);
+// 카테고리별 파일 그룹
+interface FileGroup {
+  label: string; // 카테고리명 (표시용)
+  doc_type: string; // 백엔드 doc_type
+  open: boolean;
+  files: File[];
+}
+
+const categorizedFiles = ref<FileGroup[]>([]);
 const isDragging = ref(false);
+
+// 파일명으로 카테고리 자동 감지
+function detectCategory(filename: string): { label: string; doc_type: string } {
+  const name = filename.toLowerCase();
+  if (name.includes("입찰공고") || name.includes("bid"))
+    return { label: "입찰공고문", doc_type: "bid_notice" };
+  if (name.includes("제안요청") || name.includes("rfp"))
+    return { label: "제안요청서", doc_type: "proposal_request" };
+  if (name.includes("제안서") || name.includes("proposal"))
+    return { label: "제안서", doc_type: "proposal" };
+  if (name.includes("계획") || name.includes("plan"))
+    return { label: "계획서", doc_type: "plan" };
+  if (name.includes("계약") || name.includes("contract"))
+    return { label: "계약서", doc_type: "contract" };
+  return { label: "기타", doc_type: "unknown" };
+}
+
+// 카테고리에 파일 추가
+function addFilesToCategories(files: File[]) {
+  for (const file of files) {
+    const { label, doc_type } = detectCategory(file.name);
+    const existing = categorizedFiles.value.find(
+      (g) => g.doc_type === doc_type,
+    );
+    if (existing) {
+      if (!existing.files.find((f) => f.name === file.name))
+        existing.files.push(file);
+    } else {
+      categorizedFiles.value.push({
+        label,
+        doc_type,
+        open: true,
+        files: [file],
+      });
+    }
+  }
+}
+
+// 전체 파일 목록 (업로드용)
+const allSelectedFiles = computed(() =>
+  categorizedFiles.value.flatMap((g) => g.files),
+);
+
+// 카테고리별 분류 맵 (업로드 시 백엔드 전송용)
+const fileCategoryMap = computed(() => {
+  const map: Record<string, string> = {};
+  for (const g of categorizedFiles.value) {
+    for (const f of g.files) map[f.name] = g.doc_type;
+  }
+  return map;
+});
 const isLoading = ref(false);
 const loadingText = ref("문서 검토중...");
 const loadingProgress = ref(0);
 const fileInputMain = ref<HTMLInputElement>();
+// 아코디언 강제 리렌더 키
+const accordionRenderKey = ref(0);
+const accordionRef = ref<HTMLElement>();
+let accordionOpenTimer: ReturnType<typeof setTimeout> | null = null;
+let currentDragItem: HTMLElement | null = null;
+let sortableDocumentBound = false;
 
 const shareMembers = ref([
   { name: "누구나" },
@@ -484,11 +574,205 @@ function closeTrigger(id: string) {
 }
 
 onMounted(() => {
+  const pid = Number(route.query.project_id || route.query.projectId || 1);
+  projectId.value = Number.isFinite(pid) && pid > 0 ? pid : 1;
+
   if (!localStorage.getItem("clms_logged_in")) router.push("/");
-  // 트리거 토글 (퍼블리싱 JS 로직)
   document.addEventListener("click", handleTrigger);
 });
-onUnmounted(() => document.removeEventListener("click", handleTrigger));
+onUnmounted(() => {
+  document.removeEventListener("click", handleTrigger);
+  if (accordionOpenTimer) {
+    clearTimeout(accordionOpenTimer);
+    accordionOpenTimer = null;
+  }
+});
+
+// SortableJS 초기화 — categorizedFiles 변경될 때마다 재초기화
+watch(
+  categorizedFiles,
+  () => {
+    nextTick(() => initSortable());
+  },
+  { deep: true },
+);
+
+function initSortable() {
+  if (!accordionRef.value) return;
+
+  // 분류 패널별 드래그 정렬 연결
+  accordionRef.value
+    .querySelectorAll(".accordion_panel")
+    .forEach((panel: Element) => {
+      const el = panel as HTMLElement;
+      if (el.dataset.sortableInit === "true") return;
+      el.dataset.sortableInit = "true";
+
+      new Sortable(el, {
+        group: "accordion_shared",
+        animation: 180,
+        draggable: ".accordion_panel_item",
+        handle: ".panel_item_tit_wrap",
+        ghostClass: "is_dragging",
+        chosenClass: "is_chosen",
+        dragClass: "is_drag",
+        fallbackOnBody: true,
+        swapThreshold: 0.65,
+        emptyInsertThreshold: 12,
+
+        onStart(evt: any) {
+          // 현재 드래그 중인 아이템 참조 저장
+          document.body.classList.add("is_sorting");
+          currentDragItem = evt.item;
+        },
+
+        onEnd(evt: any) {
+          // 드래그 종료 후 Vue 상태 반영
+          document.body.classList.remove("is_sorting");
+          if (accordionOpenTimer) {
+            clearTimeout(accordionOpenTimer);
+            accordionOpenTimer = null;
+          }
+          applySortableChange(evt);
+          currentDragItem = null;
+        },
+      });
+    });
+
+  if (sortableDocumentBound) return;
+  sortableDocumentBound = true;
+
+  // 드래그 중 다른 아코디언 버튼 위에 올리면 자동 오픈
+  // 다른 분류 헤더 위로 드래그하면 자동으로 펼침
+  document.addEventListener("dragover", (e) => {
+    if (!document.body.classList.contains("is_sorting")) return;
+    const btn = (e.target as HTMLElement).closest(".accordion_btn");
+    if (!btn) return;
+    const item = btn.closest(".accordion_item") as HTMLElement;
+    if (!item) return;
+
+    e.preventDefault();
+
+    if (item.classList.contains("open")) return;
+
+    if (accordionOpenTimer) {
+      clearTimeout(accordionOpenTimer);
+    }
+
+    accordionOpenTimer = setTimeout(() => {
+      const groupIdx = [
+        ...(accordionRef.value?.querySelectorAll(".accordion_item") || []),
+      ].indexOf(item);
+      if (groupIdx >= 0 && categorizedFiles.value[groupIdx]) {
+        categorizedFiles.value[groupIdx].open = true;
+      }
+    }, 120);
+  });
+
+  // 닫힌 분류 헤더 위에 drop 하면 해당 패널 끝으로 문서를 이동
+}
+
+// DOM → Vue 데이터 동기화 (드래그 후)
+function syncFromDom() {
+  if (!accordionRef.value) return;
+  const newGroups: typeof categorizedFiles.value = [];
+  const usedNames = new Set<string>();
+
+  accordionRef.value
+    .querySelectorAll(".accordion_item")
+    .forEach((item: Element) => {
+      const docType = (item as HTMLElement).dataset.docType;
+      const existing = categorizedFiles.value.find(
+        (group) => group.doc_type === docType,
+      );
+      if (!existing) return;
+
+      const panelItems = item.querySelectorAll(".accordion_panel_item");
+      const newFiles: File[] = [];
+
+      panelItems.forEach((pi: Element) => {
+        const titleEl = pi.querySelector(".tit");
+        if (!titleEl) return;
+        const fname = titleEl.textContent?.trim() || "";
+        if (!fname || usedNames.has(fname)) return;
+        // 파일명으로 원본 File 객체 찾기
+        const allFiles = categorizedFiles.value.flatMap((g) => g.files);
+        const file = allFiles.find((f) => f.name === fname);
+        if (file) {
+          newFiles.push(file);
+          usedNames.add(fname);
+        }
+      });
+
+      newGroups.push({
+        label: existing.label,
+        doc_type: existing.doc_type,
+        open: existing.open,
+        files: newFiles,
+      });
+    });
+
+  // 빈 그룹 제거 후 업데이트
+  categorizedFiles.value = newGroups.filter((g) => g.files.length > 0);
+}
+
+// Sortable 이벤트 정보를 기준으로 Vue 상태를 직접 갱신
+function applySortableChange(evt: {
+  item: HTMLElement;
+  from: HTMLElement;
+  to: HTMLElement;
+  oldIndex: number;
+  newIndex: number;
+}) {
+  const fname = evt.item.querySelector(".tit")?.textContent?.trim();
+  const fromDocType = evt.from
+    .closest(".accordion_item")
+    ?.getAttribute("data-doc-type");
+  const toDocType = evt.to
+    .closest(".accordion_item")
+    ?.getAttribute("data-doc-type");
+  if (!fname || !fromDocType || !toDocType) {
+    syncFromDom();
+    return;
+  }
+
+  const targetGroup = categorizedFiles.value.find(
+    (group) => group.doc_type === toDocType,
+  );
+  if (!targetGroup) {
+    syncFromDom();
+    return;
+  }
+
+  const newIndex = evt.newIndex ?? -1;
+  if (newIndex < 0) {
+    syncFromDom();
+    return;
+  }
+
+  let movedFile: File | null = null;
+
+  // 어떤 경로로 drop 되었든 동일 파일은 전체 그룹에서 한 번만 남도록 정리
+  categorizedFiles.value.forEach((group) => {
+    const fileIdx = group.files.findIndex((file) => file.name === fname);
+    if (fileIdx < 0) return;
+
+    const [file] = group.files.splice(fileIdx, 1);
+    if (file && !movedFile) movedFile = file;
+  });
+
+  if (!movedFile) {
+    syncFromDom();
+    return;
+  }
+
+  const insertIdx = Math.max(0, Math.min(newIndex, targetGroup.files.length));
+  targetGroup.files.splice(insertIdx, 0, movedFile);
+  categorizedFiles.value = categorizedFiles.value.filter(
+    (group) => group.files.length > 0,
+  );
+  accordionRenderKey.value += 1;
+}
 
 function handleTrigger(e: MouseEvent) {
   const el = (e.target as HTMLElement).closest(
@@ -508,45 +792,67 @@ function toggleEditTitle() {
   isEditTitle.value = !isEditTitle.value;
 }
 
+function fileIcon(filename: string) {
+  if (filename.startsWith("http")) return "/img/icon/ic_file_link.svg";
+  const ext = filename.split(".").pop()?.toLowerCase() || "";
+  const map: Record<string, string> = {
+    pdf: "/img/icon/ic_file_pdf.svg",
+    hwp: "/img/icon/ic_file_hwp.svg",
+    hwpx: "/img/icon/ic_file_hwpx.svg",
+    xlsx: "/img/icon/ic_file_xlsx.svg",
+    xls: "/img/icon/ic_file_xlsx.svg",
+    csv: "/img/icon/ic_file_xlsx.svg",
+    txt: "/img/icon/ic_file_txt.svg",
+    zip: "/img/icon/ic_file_upload.svg",
+  };
+  return map[ext] || "/img/icon/ic_doc.svg";
+}
+
 function onFileChange(e: Event) {
   const input = e.target as HTMLInputElement;
   if (!input.files) return;
-  addFiles(Array.from(input.files));
+  addFilesToCategories(Array.from(input.files));
+  if (input) input.value = "";
 }
 
 function onDrop(e: DragEvent) {
   isDragging.value = false;
   if (!e.dataTransfer?.files) return;
-  addFiles(Array.from(e.dataTransfer.files));
+  addFilesToCategories(Array.from(e.dataTransfer.files));
 }
 
-function addFiles(files: File[]) {
-  const existing = new Set(selectedFiles.value.map((f) => f.name));
-  for (const f of files) {
-    if (!existing.has(f.name)) selectedFiles.value.push(f);
-  }
-}
-
-function removeFile(i: number) {
-  selectedFiles.value.splice(i, 1);
+function removeFile(groupIdx: number, fileIdx: number) {
+  const group = categorizedFiles.value[groupIdx];
+  if (!group) return;
+  group.files.splice(fileIdx, 1);
+  // 빈 카테고리 제거
+  if (group.files.length === 0) categorizedFiles.value.splice(groupIdx, 1);
 }
 
 async function startReview() {
-  if (!selectedFiles.value.length) return;
+  if (!allSelectedFiles.value.length) return;
   isLoading.value = true;
   loadingProgress.value = 0;
   loadingText.value = "문서 검토중...";
 
   try {
-    const runId = await uploadStream(selectedFiles.value, true, (evt) => {
-      if (evt.type === "file_start")
-        loadingText.value = `${evt.filename} OCR 중...`;
-      if (evt.type === "ocr_page") loadingProgress.value = evt.progress;
-      if (evt.type === "review_start") loadingText.value = "검토 분석 중...";
-      if (evt.type === "file_done")
-        loadingText.value = `${evt.filename} 완료 (이슈 ${evt.issue_count}건)`;
+    const runId = await uploadStream(
+      allSelectedFiles.value,
+      true,
+      (evt) => {
+        if (evt.type === "file_start")
+          loadingText.value = `${evt.filename} OCR 중...`;
+        if (evt.type === "ocr_page") loadingProgress.value = evt.progress;
+        if (evt.type === "review_start") loadingText.value = "검토 분석 중...";
+        if (evt.type === "file_done")
+          loadingText.value = `${evt.filename} 완료 (이슈 ${evt.issue_count}건)`;
+      },
+      fileCategoryMap.value,
+    );
+    router.push({
+      path: `/review/${runId}`,
+      query: { project_id: String(projectId.value) },
     });
-    router.push(`/review/${runId}`);
   } catch (e) {
     alert("검토 중 오류가 발생했습니다.");
   } finally {
@@ -555,7 +861,7 @@ async function startReview() {
 }
 
 function goReview() {
-  selectedFiles.value = [];
+  categorizedFiles.value = [];
   leftOpen.value = true;
 }
 
