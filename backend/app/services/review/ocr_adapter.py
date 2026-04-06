@@ -58,9 +58,13 @@ def from_junior_format(
 
             # bbox: [ymin, xmin, ymax, xmax] → [x1, y1, x2, y2]
             raw = block.get("bbox", [0, 0, 0, 0])
+            source = block.get("source", "gemma")
             if len(raw) == 4:
-                ymin, xmin, ymax, xmax = raw
-                bbox = [xmin, ymin, xmax, ymax]
+                if source == "fitz":
+                    bbox = raw
+                else:
+                    ymin, xmin, ymax, xmax = raw
+                    bbox = [xmin, ymin, xmax, ymax]
             else:
                 bbox = [0, 0, 0, 0]
 

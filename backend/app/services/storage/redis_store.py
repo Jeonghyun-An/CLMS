@@ -48,6 +48,9 @@ def next_review_id() -> int:
 def save_review(run_id: int, data: dict) -> bool:
     """검토 결과 저장"""
     try:
+        import copy
+        data = copy.deepcopy(data)  # 원본 데이터 보호
+        
         key = f"clms:review:{run_id}"
         # full_text는 용량이 크므로 별도 키로 분리
         full_text = data.pop("full_text", "")

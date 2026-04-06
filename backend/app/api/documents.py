@@ -52,7 +52,8 @@ def _get_file_format(filename: str) -> FileFormat:
 def _get_doc_type(doc_type_str: str) -> DocumentType:
     return {
         "bid_notice":       DocumentType.bid_document,
-        "proposal_request": DocumentType.proposal,
+        "proposal_request": DocumentType.proposal_request,
+        "proposal":         DocumentType.proposal,
         "plan":             DocumentType.plan,
         "contract":         DocumentType.contract,
         "unknown":          DocumentType.unknown,

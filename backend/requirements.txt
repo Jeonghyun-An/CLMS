@@ -42,7 +42,7 @@ lxml==5.3.0
 # ── AI / ML ────────────────────────────────────
 # openai==1.57.4
 # transformers==4.46.3
-# sentence-transformers==3.3.1
+sentence-transformers==3.3.1
 # datasets==3.1.0
 # seqeval==1.2.2
 

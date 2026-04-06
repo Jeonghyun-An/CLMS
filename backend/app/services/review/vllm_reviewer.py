@@ -12,8 +12,12 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from app.services.review.engine import ParsedDocument
 
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://host.docker.internal:18080/v1")
 VLLM_MODEL    = os.getenv("VLLM_MODEL", "gemma-3-12b")
@@ -112,7 +116,41 @@ def _normalize_llm_issue(raw: dict) -> dict:
         "source":          "llm",
         "created_at":      datetime.now().isoformat(),
     }
+def _find_bbox_for_quoted_text(
+    quoted_text: str,
+    parsed_doc: "ParsedDocument",
+) -> list[dict]:
+    """quoted_text와 매칭되는 블록 찾아서 bbox 반환"""
+    if not quoted_text or not parsed_doc:
+        return []
 
+    search = quoted_text[:30].strip()
+    candidates = []
+
+    for block in parsed_doc.blocks:
+        # 정확 매칭
+        if search in block.text or block.text[:30] in quoted_text:
+            if any(v > 0 for v in block.bbox):
+                candidates.append({
+                    "page_no":  block.page_no,
+                    "bbox":     block.bbox,
+                    "block_id": block.block_id,
+                })
+
+    # 정확 매칭 없으면 단어 단위 fuzzy 매칭
+    if not candidates:
+        words = set(search.split())
+        for block in parsed_doc.blocks:
+            block_words = set(block.text.split())
+            overlap = words & block_words
+            if len(overlap) >= min(2, len(words)) and any(v > 0 for v in block.bbox):
+                candidates.append({
+                    "page_no":  block.page_no,
+                    "bbox":     block.bbox,
+                    "block_id": block.block_id,
+                })
+
+    return candidates[:3]  # 최대 3개
 
 async def run_hybrid_review(
     full_text: str,
@@ -120,17 +158,8 @@ async def run_hybrid_review(
     review_run_id: int = 0,
     use_llm: bool = True,
     doc_type: str = "unknown",
+    parsed_doc: "ParsedDocument | None" = None,  # ← 추가
 ) -> list[dict]:
-    """
-    문서 타입별 룰셋 + vLLM 하이브리드 실행.
-
-    Args:
-        full_text:     zerox / OCR 추출 텍스트
-        document_id:   문서 ID
-        review_run_id: 검토 실행 ID
-        use_llm:       vLLM 호출 여부 (False면 룰 엔진만)
-        doc_type:      "bid_notice" | "proposal_request" | "plan" | "unknown"
-    """
     from app.services.review.engine import (
         ParsedBlock, ParsedDocument, ReviewIssue,
         HANDLER_MAP, issues_to_api_response,
@@ -139,14 +168,17 @@ async def run_hybrid_review(
         get_rules_for_doc_type, get_system_prompt,
     )
 
-    # 1) 문서 파싱
-    doc = ParsedDocument(document_id=document_id)
-    for i, line in enumerate(full_text.splitlines(), start=1):
-        line = line.strip()
-        if line:
-            doc.blocks.append(ParsedBlock(i, 1, line, [0, 0, 0, 0]))
+    # 1) 문서 파싱 — parsed_doc 있으면 bbox 살아있는 blocks 사용
+    if parsed_doc is not None:
+        doc = parsed_doc
+    else:
+        doc = ParsedDocument(document_id=document_id)
+        for i, line in enumerate(full_text.splitlines(), start=1):
+            line = line.strip()
+            if line:
+                doc.blocks.append(ParsedBlock(i, 1, line, [0, 0, 0, 0]))
 
-    # 2) 룰 엔진 (타입별 룰셋)
+    # 2) 룰 엔진
     rules = get_rules_for_doc_type(doc_type)
     rule_issues_raw: list[ReviewIssue] = []
     for rule in rules:
@@ -178,6 +210,17 @@ async def run_hybrid_review(
             iss["id"]            = i
             iss["review_run_id"] = review_run_id
             iss["document_id"]   = document_id
+            
+            # ← 여기 추가: quoted_text → bbox 역추적
+            if parsed_doc and iss.get("evidences"):
+                quoted = iss["evidences"][0].get("quoted_text", "")
+                if quoted:
+                    try:
+                        from app.services.storage.milvus_store import search_blocks
+                        iss["highlights"] = search_blocks(quoted, parsed_doc)
+                    except Exception as e:
+                        print(f"[vLLM] Milvus 검색 실패: {e}")
+                        iss["highlights"] = _find_bbox_for_quoted_text(quoted, parsed_doc)
 
     # 4) 심각도 순 정렬 + 합산
     sev_order = {"critical": 0, "high": 1, "warning": 2, "info": 3}
@@ -186,13 +229,13 @@ async def run_hybrid_review(
         key=lambda x: sev_order.get(x.get("severity", "info"), 9),
     )
 
-
 def run_hybrid_review_sync(
     full_text: str,
     document_id: int = 0,
     review_run_id: int = 0,
     use_llm: bool = True,
     doc_type: str = "unknown",
+    parsed_doc: "ParsedDocument | None" = None,
 ) -> list[dict]:
     """
     ⚠️  FastAPI(uvloop) 환경에서는 사용 불가.
@@ -200,5 +243,5 @@ def run_hybrid_review_sync(
     """
     import asyncio
     return asyncio.run(
-        run_hybrid_review(full_text, document_id, review_run_id, use_llm, doc_type)
+        run_hybrid_review(full_text, document_id, review_run_id, use_llm, doc_type, parsed_doc)
     )

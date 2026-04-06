@@ -264,7 +264,7 @@
               <input
                 type="file"
                 multiple
-                accept=".pdf,.hwp,.hwpx,.xlsx"
+                accept=".pdf,.hwp,.hwpx,.xlsx,.xls,.pptx,.ppt,.docx,.doc"
                 class="file_upload_input"
                 style="display: none"
                 @change="onFileChange"
@@ -278,7 +278,8 @@
                   <img src="/img/icon/ic_empty_source.svg" alt="" />
                 </div>
                 <div class="txt_wrap">
-                  저장된 소스가 여기에 표시됩니다.<br />(pdf, hwpx, xlsx 가능)
+                  저장된 소스가 여기에 표시됩니다.<br />(pdf, docx, xlsx, pptx
+                  가능)
                 </div>
               </div>
               <template v-else>
@@ -376,7 +377,7 @@
             <div class="upload_tit_wrap">
               <template v-if="!allSelectedFiles.length">
                 <p class="upload_tit">또는 파일 드롭</p>
-                <p class="upload_desc">PDF, hwpx, xlsx 등</p>
+                <p class="upload_desc">PDF, DOCX, XLSX, PPTX 등</p>
               </template>
               <ul v-else class="upload_file_list">
                 <li v-for="f in allSelectedFiles" :key="f.name">
@@ -387,7 +388,7 @@
             <input
               type="file"
               multiple
-              accept=".pdf,.hwp,.hwpx,.xlsx"
+              accept=".pdf,.hwp,.hwpx,.xlsx,.xls,.pptx,.ppt,.docx,.doc"
               class="file_upload_input"
               ref="fileInputMain"
               @change="onFileChange"
@@ -804,6 +805,10 @@ function fileIcon(filename: string) {
     csv: "/img/icon/ic_file_xlsx.svg",
     txt: "/img/icon/ic_file_txt.svg",
     zip: "/img/icon/ic_file_upload.svg",
+    docx: "/img/icon/ic_file_docx.svg", // ← 추가
+    doc: "/img/icon/ic_file_docx.svg", // ← 추가
+    pptx: "/img/icon/ic_file_pptx.svg", // ← 추가
+    ppt: "/img/icon/ic_file_pptx.svg", // ← 추가
   };
   return map[ext] || "/img/icon/ic_doc.svg";
 }

@@ -75,4 +75,6 @@ class DocumentType(str, Enum):
     design_sheet = "design_sheet"
     contract_draft = "contract_draft"
     attachment = "attachment"
+    contract = "contract"
+    proposal = "proposal"
     unknown = "unknown"

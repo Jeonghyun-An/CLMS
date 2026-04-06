@@ -212,7 +212,13 @@ async def get_review_highlights(
                     color=color,
                     label=iss["title"][:20],
                 ))
-
+    print(f"[highlights] 이슈 수: {len(issues)}")
+    for iss in issues:
+        hl = iss.get('highlights', [])
+        if hl:
+            print(f"  {iss['title']}: bbox={hl[0].get('bbox')}")
+        else:
+            print(f"  {iss['title']}: highlights 없음")
     return BaseResponse(data=HighlightResponse(
         review_run_id=review_run_id,
         document_id=document_id,

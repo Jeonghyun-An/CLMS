@@ -599,14 +599,14 @@
             <div class="result_list">
               <!-- 검토 전/결과 없음 -->
               <div
-                v-if="!isAbnormal || !currentDocIssues.length"
+                v-if="isNormalDoc || !currentDocIssues.length"
                 class="empty_wrap"
               >
                 <div class="ic_wrap">
                   <img src="/img/icon/ic_empty_result.svg" alt="" />
                 </div>
                 <div class="txt_wrap">
-                  <template v-if="!isAbnormal">
+                  <template v-if="isNormalDoc">
                     검토 결과가 없습니다.
                   </template>
                   <template v-else>
@@ -615,7 +615,7 @@
                   </template>
                 </div>
               </div>
-              <div v-if="isAbnormal" class="result_inn_list">
+              <div v-if="!isNormalDoc" class="result_inn_list">
                 <a
                   v-for="iss in currentDocIssues"
                   :key="iss.id"
@@ -767,10 +767,18 @@ const currentPage = ref(1);
 const totalPage = ref(1);
 const hoveredIssueId = ref<number | null>(null);
 const focusedIssueId = ref<number | null>(null);
-const isAbnormal = computed(() => {
+// const isAbnormal = computed(() => {
+//   const filename =
+//     selectedDoc.value?.original_filename || selectedDoc.value?.filename || "";
+//   return filename.includes("_비정상");
+// });
+const NORMAL_DOC_NAMES = ["제안요청서", "입찰공고문", "00.용역계약서"];
+
+const isNormalDoc = computed(() => {
   const filename =
     selectedDoc.value?.original_filename || selectedDoc.value?.filename || "";
-  return filename.includes("_비정상");
+  const stem = filename.replace(/\.[^/.]+$/, ""); // 확장자 제거
+  return NORMAL_DOC_NAMES.some((name) => stem === name);
 });
 const reportDownloadUrl = computed(() => getReportDownloadUrl(runId.value));
 
@@ -829,6 +837,14 @@ function buildDocGroups() {
 }
 
 watch(docFiles, buildDocGroups, { immediate: true });
+// review.vue에서 임시로 추가
+watch(highlights, (val) => {
+  console.log("[highlights]", JSON.stringify(val[0]));
+});
+
+watch(overlayResults, (val) => {
+  console.log("[overlayResults]", JSON.stringify(val[0]));
+});
 
 function fileIcon(filename?: string) {
   if (!filename) return "/img/icon/ic_doc.svg";
@@ -846,6 +862,10 @@ function fileIcon(filename?: string) {
     png: "/img/icon/ic_doc.svg",
     jpg: "/img/icon/ic_doc.svg",
     jpeg: "/img/icon/ic_doc.svg",
+    docx: "/img/icon/ic_file_docx.svg",
+    doc: "/img/icon/ic_file_docs.svg",
+    ppt: "/img/icon/ic_file_pptx.svg",
+    pptx: "/img/icon/ic_file_pptx.svg",
   };
   return map[ext] || "/img/icon/ic_doc.svg";
 }
@@ -1057,9 +1077,12 @@ function docTypeLabel(t?: string) {
   return (
     {
       bid_notice: "입찰공고문",
+      bid_document: "입찰공고문",
       proposal_request: "제안요청서",
+      proposal: "제안서",
       plan: "계획서",
-      contract_draft: "계약서",
+      contract: "계약서",
+      contract_draft: "계약서(초안)",
       unknown: "기타",
     }[t || ""] ||
     t ||

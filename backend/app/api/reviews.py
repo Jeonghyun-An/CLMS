@@ -379,36 +379,26 @@ async def get_review_pdf(
     if not target:
         raise HTTPException(status_code=404, detail="문서를 찾을 수 없습니다.")
 
-    filename = target.get("filename")
+    # pdf_filename 우선, 없으면 filename fallback
+    filename = target.get("pdf_filename") or target.get("filename")
     if not filename:
         raise HTTPException(status_code=404, detail="문서 파일명이 없습니다.")
 
-    # 1순위: MinIO에서 PDF 원본 로드
+    # 1순위: MinIO에서 PDF 로드
     try:
         from app.services.storage.minio_client import load_pdf
-
         pdf_bytes = load_pdf(filename)
         if pdf_bytes:
-            encoded_filename = quote(filename)
-            return Response(
-                content=pdf_bytes,
-                media_type="application/pdf",
-                
-            )
+            return Response(content=pdf_bytes, media_type="application/pdf")
     except Exception as e:
         print(f"[PDF] MinIO 로드 실패: {e}")
 
-    # 2순위: 로컬 저장 경로 fallback
+    # 2순위: 로컬 fallback
     try:
         from pathlib import Path
-
         local_path = Path("/data/clms_seocho") / filename
         if local_path.exists():
-            return Response(
-                content=local_path.read_bytes(),
-                media_type="application/pdf",
-                
-            )
+            return Response(content=local_path.read_bytes(), media_type="application/pdf")
     except Exception as e:
         print(f"[PDF] 로컬 파일 로드 실패: {e}")
 

@@ -145,10 +145,14 @@ def detect_doc_type(text: str, filename: str = "") -> str:
     fname = filename.lower()
     if any(kw in fname for kw in ["입찰공고", "공고문", "bid"]):
         return "bid_notice"
-    if any(kw in fname for kw in ["제안요청서", "rfp", "proposal"]):
+    if any(kw in fname for kw in ["제안요청서", "rfp"]):
         return "proposal_request"
+    if any(kw in fname for kw in ["제안서", "proposal"]):
+        return "proposal"
     if any(kw in fname for kw in ["계획서", "plan"]):
         return "plan"
+    if any(kw in fname for kw in ["계약서", "contract"]):
+        return "contract"
 
     # 텍스트 키워드 스코어링
     scores = {doc_type: 0 for doc_type in DOC_TYPE_PATTERNS}
@@ -166,7 +170,9 @@ def get_rules_for_doc_type(doc_type: str) -> list[dict]:
     ruleset_map = {
         "bid_notice":       RULES_BID_NOTICE,
         "proposal_request": RULES_PROPOSAL_REQUEST,
+        "proposal":         RULES_PROPOSAL_REQUEST,  # 제안서도 제안요청서 룰로 검토
         "plan":             RULES_PLAN,
+        "contract":         RULES_BID_NOTICE,  # 계약서류는 일단 입찰공고문 룰로 검토
         "unknown":          RULES_BID_NOTICE,  # 기본값
     }
     return ruleset_map.get(doc_type, RULES_BID_NOTICE)
